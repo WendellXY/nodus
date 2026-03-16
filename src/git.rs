@@ -258,6 +258,38 @@ pub fn ensure_git_dependency(
     })
 }
 
+pub fn ensure_git_dependency_at_rev(
+    cache_root: &Path,
+    url: &str,
+    tag: Option<&str>,
+    branch: Option<&str>,
+    rev: &str,
+    allow_network: bool,
+    reporter: &Reporter,
+) -> Result<GitCheckout> {
+    let normalized_url = normalize_git_url(url);
+    let mirror_path = shared_repository_path(cache_root, &normalized_url)?;
+    ensure_shared_repository(&mirror_path, &normalized_url, allow_network, reporter)?;
+
+    let checkout_path = shared_checkout_path(cache_root, &normalized_url, rev)?;
+    ensure_shared_checkout(
+        &checkout_path,
+        &mirror_path,
+        &normalized_url,
+        rev,
+        allow_network,
+        reporter,
+    )?;
+
+    Ok(GitCheckout {
+        path: checkout_path,
+        url: normalized_url,
+        tag: tag.map(ToOwned::to_owned),
+        branch: branch.map(ToOwned::to_owned),
+        rev: rev.to_string(),
+    })
+}
+
 pub fn prepare_repository_mirror(
     cache_root: &Path,
     url: &str,

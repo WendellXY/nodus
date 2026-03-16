@@ -115,6 +115,11 @@ enum Command {
         #[arg(long, help = "Fail if nodus.lock would change")]
         locked: bool,
         #[arg(
+            long,
+            help = "Install exact Git revisions from nodus.lock and fail if the lockfile is missing or stale"
+        )]
+        frozen: bool,
+        #[arg(
             long = "allow-high-sensitivity",
             help = "Allow packages that declare high-sensitivity capabilities"
         )]
@@ -282,19 +287,31 @@ fn run_command_in_dir(
         }
         Command::Sync {
             locked,
+            frozen,
             allow_high_sensitivity,
             adapter,
             sync_on_launch,
         } => {
-            let summary = crate::resolver::sync_in_dir_with_adapters(
-                cwd,
-                cache_root,
-                locked,
-                allow_high_sensitivity,
-                &adapter,
-                sync_on_launch,
-                reporter,
-            )?;
+            let summary = if frozen {
+                crate::resolver::sync_in_dir_with_adapters_frozen(
+                    cwd,
+                    cache_root,
+                    allow_high_sensitivity,
+                    &adapter,
+                    sync_on_launch,
+                    reporter,
+                )?
+            } else {
+                crate::resolver::sync_in_dir_with_adapters(
+                    cwd,
+                    cache_root,
+                    locked,
+                    allow_high_sensitivity,
+                    &adapter,
+                    sync_on_launch,
+                    reporter,
+                )?
+            };
             reporter.finish(format!(
                 "{} packages, adapters [{}], {} managed files",
                 summary.package_count,
@@ -610,6 +627,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_sync_frozen_flag() {
+        let cli = Cli::try_parse_from(["nodus", "sync", "--frozen"]).unwrap();
+
+        match cli.command {
+            Command::Sync { frozen, locked, .. } => {
+                assert!(frozen);
+                assert!(!locked);
+            }
+            other => panic!("expected sync command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_repeatable_add_component_flags() {
         let cli = Cli::try_parse_from([
             "nodus",
@@ -722,6 +752,7 @@ justification = "Run checks."
         let output = run_command_output(
             Command::Sync {
                 locked: false,
+                frozen: false,
                 allow_high_sensitivity: true,
                 adapter: vec![],
                 sync_on_launch: false,

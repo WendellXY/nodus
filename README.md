@@ -147,6 +147,12 @@ For repeatable CI:
 nodus sync --locked
 ```
 
+To install the exact Git revisions already recorded in `nodus.lock` without following newer branch heads:
+
+```bash
+nodus sync --frozen
+```
+
 When a package declares `high` sensitivity capabilities:
 
 ```bash
@@ -428,6 +434,7 @@ Options:
 
 - `--store-path <path>`: override the shared repository store root
 - `--locked`: fail if `nodus.lock` would change
+- `--frozen`: install exact Git revisions from `nodus.lock` and fail if the lockfile is missing or stale
 - `--allow-high-sensitivity`: allow packages that declare `high` sensitivity capabilities
 - `--adapter <agents|claude|codex|cursor|opencode>`: override and persist adapter selection for this repo
 

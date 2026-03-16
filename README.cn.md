@@ -147,6 +147,12 @@ nodus doctor
 nodus sync --locked
 ```
 
+如果你想严格安装 `nodus.lock` 中已经记录好的 Git 修订版本，而不是继续跟随 branch 的最新提交：
+
+```bash
+nodus sync --frozen
+```
+
 当某个包声明了 `high` 敏感度能力时：
 
 ```bash
@@ -406,6 +412,7 @@ nodus info obra/superpowers --branch main
 
 - `--store-path <path>`：覆盖共享仓库存储根目录
 - `--locked`：如果 `nodus.lock` 会发生变化则失败
+- `--frozen`：严格按 `nodus.lock` 安装 Git 修订版本；如果锁文件缺失或已过期则失败
 - `--allow-high-sensitivity`：允许声明了 `high` 敏感度能力的包
 - `--adapter <agents|claude|codex|cursor|opencode>`：覆盖并持久化该仓库的适配器选择
 

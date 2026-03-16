@@ -8,8 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::adapters::{Adapter, Adapters, ManagedFile, build_output_plan};
 use crate::git::{
-    current_rev, ensure_git_dependency, shared_checkout_path, shared_repository_path,
-    validate_shared_checkout,
+    current_rev, ensure_git_dependency, ensure_git_dependency_at_rev, shared_checkout_path,
+    shared_repository_path, validate_shared_checkout,
 };
 use crate::lockfile::{LOCKFILE_NAME, LockedPackage, LockedSource, Lockfile};
 use crate::manifest::{
@@ -70,6 +70,31 @@ enum ResolveMode {
     Doctor,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncMode {
+    Normal,
+    Locked,
+    Frozen,
+}
+
+impl SyncMode {
+    fn checks_lockfile(self) -> bool {
+        matches!(self, Self::Locked | Self::Frozen)
+    }
+
+    fn installs_from_lockfile(self) -> bool {
+        matches!(self, Self::Frozen)
+    }
+
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Normal => "`nodus sync`",
+            Self::Locked => "`nodus sync --locked`",
+            Self::Frozen => "`nodus sync --frozen`",
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct ResolverState {
     stack: Vec<PathBuf>,
@@ -80,6 +105,7 @@ struct ResolverState {
 struct ResolveContext<'a> {
     cache_root: &'a Path,
     mode: ResolveMode,
+    frozen_lockfile: Option<&'a Lockfile>,
     reporter: &'a Reporter,
 }
 
@@ -93,10 +119,14 @@ pub fn sync_with_adapters(
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
-    sync_in_dir_with_adapters(
+    sync_in_dir_with_adapters_mode(
         &cwd,
         cache_root,
-        locked,
+        if locked {
+            SyncMode::Locked
+        } else {
+            SyncMode::Normal
+        },
         allow_high_sensitivity,
         adapters,
         sync_on_launch,
@@ -111,10 +141,31 @@ pub fn sync_in_dir(
     allow_high_sensitivity: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
-    sync_in_dir_with_adapters(
+    sync_in_dir_with_adapters_mode(
         cwd,
         cache_root,
-        locked,
+        if locked {
+            SyncMode::Locked
+        } else {
+            SyncMode::Normal
+        },
+        allow_high_sensitivity,
+        &[],
+        false,
+        reporter,
+    )
+}
+
+pub fn sync_in_dir_frozen(
+    cwd: &Path,
+    cache_root: &Path,
+    allow_high_sensitivity: bool,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_mode(
+        cwd,
+        cache_root,
+        SyncMode::Frozen,
         allow_high_sensitivity,
         &[],
         false,
@@ -131,17 +182,61 @@ pub fn sync_in_dir_with_adapters(
     sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_mode(
+        cwd,
+        cache_root,
+        if locked {
+            SyncMode::Locked
+        } else {
+            SyncMode::Normal
+        },
+        allow_high_sensitivity,
+        adapters,
+        sync_on_launch,
+        reporter,
+    )
+}
+
+pub fn sync_in_dir_with_adapters_frozen(
+    cwd: &Path,
+    cache_root: &Path,
+    allow_high_sensitivity: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_mode(
+        cwd,
+        cache_root,
+        SyncMode::Frozen,
+        allow_high_sensitivity,
+        adapters,
+        sync_on_launch,
+        reporter,
+    )
+}
+
+fn sync_in_dir_with_adapters_mode(
+    cwd: &Path,
+    cache_root: &Path,
+    sync_mode: SyncMode,
+    allow_high_sensitivity: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
     let mut root = load_root_from_dir(cwd)?;
     let selection = resolve_adapter_selection(
         cwd,
         &root.manifest,
         adapters,
-        !locked && should_prompt_for_adapter(),
+        !sync_mode.checks_lockfile() && should_prompt_for_adapter(),
     )?;
     if selection.should_persist {
-        if locked {
+        if sync_mode.checks_lockfile() {
             bail!(
-                "adapter selection must be persisted before running `nodus sync --locked`; rerun without `--locked` or set `[adapters] enabled = [...]` in nodus.toml"
+                "adapter selection must be persisted before running {}; rerun without `--locked` or `--frozen`, or set `[adapters] enabled = [...]` in nodus.toml",
+                sync_mode.flag(),
             );
         }
         root.manifest.set_enabled_adapters(&selection.adapters);
@@ -152,9 +247,10 @@ pub fn sync_in_dir_with_adapters(
         write_manifest(&cwd.join(crate::manifest::MANIFEST_FILE), &root.manifest)?;
     }
     if sync_on_launch {
-        if locked {
+        if sync_mode.checks_lockfile() {
             bail!(
-                "launch hook configuration must be persisted before running `nodus sync --locked`; rerun without `--locked` or set `[launch_hooks] sync_on_startup = true` in nodus.toml"
+                "launch hook configuration must be persisted before running {}; rerun without `--locked` or `--frozen`, or set `[launch_hooks] sync_on_startup = true` in nodus.toml",
+                sync_mode.flag(),
             );
         }
         root.manifest.set_sync_on_launch(true);
@@ -165,8 +261,30 @@ pub fn sync_in_dir_with_adapters(
         write_manifest(&cwd.join(crate::manifest::MANIFEST_FILE), &root.manifest)?;
     }
 
+    let lockfile_path = cwd.join(LOCKFILE_NAME);
+    let existing_lockfile = if lockfile_path.exists() {
+        Some(Lockfile::read(&lockfile_path)?)
+    } else {
+        None
+    };
+    if sync_mode.installs_from_lockfile() && existing_lockfile.is_none() {
+        bail!(
+            "`--frozen` requires an existing {} in {}",
+            LOCKFILE_NAME,
+            cwd.display()
+        );
+    }
+
     reporter.status("Resolving", format!("package graph in {}", cwd.display()))?;
-    let resolution = resolve_project(cwd, cache_root, ResolveMode::Sync, reporter)?;
+    let resolution = resolve_project(
+        cwd,
+        cache_root,
+        ResolveMode::Sync,
+        reporter,
+        existing_lockfile
+            .as_ref()
+            .filter(|_| sync_mode.installs_from_lockfile()),
+    )?;
     reporter.status("Checking", "declared capabilities")?;
     enforce_capabilities(&resolution, allow_high_sensitivity, reporter)?;
     reporter.status(
@@ -174,12 +292,6 @@ pub fn sync_in_dir_with_adapters(
         format!("{} packages", resolution.packages.len()),
     )?;
     let stored_packages = snapshot_resolution(cache_root, &resolution)?;
-    let lockfile_path = cwd.join(LOCKFILE_NAME);
-    let existing_lockfile = if lockfile_path.exists() {
-        Some(Lockfile::read(&lockfile_path)?)
-    } else {
-        None
-    };
 
     let snapshot_by_digest = stored_packages
         .into_iter()
@@ -203,18 +315,19 @@ pub fn sync_in_dir_with_adapters(
     let lockfile = resolution.to_lockfile(selected_adapters)?;
     let owned_paths = load_owned_paths(cwd, existing_lockfile.as_ref())?;
 
-    if locked {
+    if sync_mode.checks_lockfile() {
         let Some(existing) = existing_lockfile.as_ref() else {
             bail!(
-                "`--locked` requires an existing {} in {}",
+                "{} requires an existing {} in {}",
+                sync_mode.flag(),
                 LOCKFILE_NAME,
                 cwd.display()
             );
         };
         if *existing != lockfile {
             bail!(
-                "{} is out of date; run `nodus sync` without `--locked` to regenerate it",
-                LOCKFILE_NAME
+                "{} is out of date; run `nodus sync` without `--locked` or `--frozen` to regenerate it",
+                LOCKFILE_NAME,
             );
         }
     }
@@ -224,7 +337,7 @@ pub fn sync_in_dir_with_adapters(
     reporter.status("Writing", "managed runtime outputs")?;
     write_managed_files(planned_files)?;
 
-    if !locked {
+    if !sync_mode.checks_lockfile() {
         reporter.status("Writing", lockfile_path.display())?;
         lockfile.write(&lockfile_path)?;
     }
@@ -256,7 +369,7 @@ pub fn resolve_project_for_sync(
     cache_root: &Path,
     reporter: &Reporter,
 ) -> Result<Resolution> {
-    resolve_project(root, cache_root, ResolveMode::Sync, reporter)
+    resolve_project(root, cache_root, ResolveMode::Sync, reporter, None)
 }
 
 pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Result<DoctorSummary> {
@@ -267,7 +380,7 @@ pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Resu
         "Checking",
         "manifest, lockfile, shared store, and managed outputs",
     )?;
-    let resolution = resolve_project(cwd, cache_root, ResolveMode::Doctor, reporter)?;
+    let resolution = resolve_project(cwd, cache_root, ResolveMode::Doctor, reporter, None)?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
     if !lockfile_path.exists() {
         bail!("missing {}", LOCKFILE_NAME);
@@ -335,6 +448,7 @@ fn resolve_project(
     cache_root: &Path,
     mode: ResolveMode,
     reporter: &Reporter,
+    frozen_lockfile: Option<&Lockfile>,
 ) -> Result<Resolution> {
     let project_root = root
         .canonicalize()
@@ -342,6 +456,7 @@ fn resolve_project(
     let context = ResolveContext {
         cache_root,
         mode,
+        frozen_lockfile,
         reporter,
     };
     let mut state = ResolverState::default();
@@ -471,14 +586,33 @@ fn resolve_dependency(
                 RequestedGitRef::Tag(tag) => (Some(tag), None),
                 RequestedGitRef::Branch(branch) => (None, Some(branch)),
             };
-            let checkout = ensure_git_dependency(
-                context.cache_root,
-                &url,
-                tag,
-                branch,
-                context.mode == ResolveMode::Sync,
-                context.reporter,
-            )?;
+            let checkout = if let Some(lockfile) = context.frozen_lockfile {
+                let locked = locked_git_source(lockfile, alias, &url, tag, branch)?;
+                let rev = locked.rev.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dependency `{alias}` in {} does not record a git revision",
+                        LOCKFILE_NAME
+                    )
+                })?;
+                ensure_git_dependency_at_rev(
+                    context.cache_root,
+                    &url,
+                    locked.tag.as_deref(),
+                    locked.branch.as_deref(),
+                    rev,
+                    context.mode == ResolveMode::Sync,
+                    context.reporter,
+                )?
+            } else {
+                ensure_git_dependency(
+                    context.cache_root,
+                    &url,
+                    tag,
+                    branch,
+                    context.mode == ResolveMode::Sync,
+                    context.reporter,
+                )?
+            };
             let source = PackageSource::Git {
                 url: checkout.url,
                 tag: checkout.tag,
@@ -496,6 +630,59 @@ fn resolve_dependency(
             )
         }
     }
+}
+
+fn locked_git_source<'a>(
+    lockfile: &'a Lockfile,
+    alias: &str,
+    url: &str,
+    tag: Option<&str>,
+    branch: Option<&str>,
+) -> Result<&'a LockedSource> {
+    let matches_requested_ref = |source: &LockedSource| match (tag, branch) {
+        (Some(tag), None) => source.tag.as_deref() == Some(tag) && source.branch.is_none(),
+        (None, Some(branch)) => source.branch.as_deref() == Some(branch) && source.tag.is_none(),
+        _ => false,
+    };
+
+    let mut matching_sources = lockfile
+        .packages
+        .iter()
+        .filter(|package| {
+            package.source.kind == "git"
+                && package.source.url.as_deref() == Some(url)
+                && matches_requested_ref(&package.source)
+        })
+        .collect::<Vec<_>>();
+
+    if matching_sources.is_empty() {
+        bail!(
+            "dependency `{alias}` is missing from {}; run `nodus sync` without `--frozen` to regenerate it",
+            LOCKFILE_NAME
+        );
+    }
+
+    if matching_sources.len() > 1 {
+        let alias_matches = matching_sources
+            .iter()
+            .copied()
+            .filter(|package| package.alias == alias)
+            .collect::<Vec<_>>();
+        matching_sources = if alias_matches.is_empty() {
+            matching_sources
+        } else {
+            alias_matches
+        };
+    }
+
+    if matching_sources.len() != 1 {
+        bail!(
+            "dependency `{alias}` has ambiguous git entries in {}; run `nodus sync` without `--frozen` to regenerate it",
+            LOCKFILE_NAME
+        );
+    }
+
+    Ok(&matching_sources[0].source)
 }
 
 fn union_selected_components(
@@ -837,8 +1024,9 @@ fn prune_empty_parent_dirs(path: &Path, project_root: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::io::{self, Write};
     use std::process::Command;
+    use std::sync::{Arc, Mutex};
 
     use tempfile::TempDir;
 
@@ -851,7 +1039,7 @@ mod tests {
         shared_checkout_path, shared_repository_path,
     };
     use crate::manifest::{DependencyComponent, MANIFEST_FILE, load_root_from_dir};
-    use crate::report::Reporter;
+    use crate::report::{ColorMode, Reporter};
 
     fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -951,13 +1139,57 @@ mod tests {
         );
     }
 
+    fn commit_all(path: &Path, message: &str) {
+        let output = Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let output = Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     fn cache_dir() -> TempDir {
         TempDir::new().unwrap()
     }
 
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     fn resolve_project(root: &Path, cache_root: &Path, mode: ResolveMode) -> Result<Resolution> {
         let reporter = Reporter::silent();
-        super::resolve_project(root, cache_root, mode, &reporter)
+        super::resolve_project(root, cache_root, mode, &reporter, None)
     }
 
     fn sync_in_dir(
@@ -968,6 +1200,15 @@ mod tests {
     ) -> Result<SyncSummary> {
         let reporter = Reporter::silent();
         super::sync_in_dir(cwd, cache_root, locked, allow_high_sensitivity, &reporter)
+    }
+
+    fn sync_in_dir_frozen(
+        cwd: &Path,
+        cache_root: &Path,
+        allow_high_sensitivity: bool,
+    ) -> Result<SyncSummary> {
+        let reporter = Reporter::silent();
+        super::sync_in_dir_frozen(cwd, cache_root, allow_high_sensitivity, &reporter)
     }
 
     fn sync_in_dir_with_adapters(
@@ -2002,6 +2243,65 @@ shared = { path = "vendor/shared" }
     }
 
     #[test]
+    fn sync_emits_startup_sync_files_for_supported_adapters() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_skill(&temp.path().join("skills/review"), "Review");
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[adapters]
+enabled = ["claude", "opencode"]
+
+[launch_hooks]
+sync_on_startup = true
+"#,
+        );
+
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+        assert!(temp.path().join(".claude/hooks/nodus-sync.sh").exists());
+        assert!(temp.path().join(".claude/settings.local.json").exists());
+        assert!(temp.path().join(".opencode/plugins/nodus-sync.js").exists());
+        assert!(temp.path().join(".opencode/scripts/nodus-sync.sh").exists());
+
+        let claude_settings =
+            fs::read_to_string(temp.path().join(".claude/settings.local.json")).unwrap();
+        let opencode_plugin =
+            fs::read_to_string(temp.path().join(".opencode/plugins/nodus-sync.js")).unwrap();
+
+        assert!(claude_settings.contains("\"SessionStart\""));
+        assert!(claude_settings.contains("\"startup\""));
+        assert!(opencode_plugin.contains(".opencode/scripts/nodus-sync.sh"));
+    }
+
+    #[test]
+    fn sync_warns_when_launch_hooks_are_unsupported_for_selected_adapters() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_skill(&temp.path().join("skills/review"), "Review");
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[adapters]
+enabled = ["agents", "codex", "cursor"]
+
+[launch_hooks]
+sync_on_startup = true
+"#,
+        );
+
+        let buffer = SharedBuffer::default();
+        let reporter = Reporter::sink(ColorMode::Never, buffer.clone());
+        super::sync_in_dir(temp.path(), cache.path(), false, false, &reporter).unwrap();
+
+        let output = buffer.contents();
+        assert!(output.contains("launch sync is not emitted for `agents`"));
+        assert!(output.contains("launch sync is not emitted for `codex`"));
+        assert!(output.contains("launch sync is not emitted for `cursor`"));
+    }
+
+    #[test]
     fn sync_rejects_launch_hook_persistence_with_locked_flag() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
@@ -2023,6 +2323,134 @@ shared = { path = "vendor/shared" }
         .to_string();
 
         assert!(error.contains("launch hook configuration"));
+    }
+
+    #[test]
+    fn sync_frozen_requires_existing_lockfile() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_manifest(
+            temp.path(),
+            r#"
+[adapters]
+enabled = ["codex"]
+"#,
+        );
+
+        let error = sync_in_dir_frozen(temp.path(), cache.path(), false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("`--frozen` requires an existing nodus.lock"));
+    }
+
+    #[test]
+    fn sync_frozen_installs_branch_dependencies_from_locked_revision() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+
+        let repo = TempDir::new().unwrap();
+        write_file(
+            &repo.path().join("skills/review/SKILL.md"),
+            "---\nname: Review\ndescription: First revision.\n---\n# Review\nfirst\n",
+        );
+        init_git_repo(repo.path());
+        rename_current_branch(repo.path(), "main");
+
+        write_manifest(
+            temp.path(),
+            &format!(
+                r#"
+[adapters]
+enabled = ["codex"]
+
+[dependencies]
+review_pkg = {{ url = "{}", branch = "main" }}
+"#,
+                toml_path_value(repo.path())
+            ),
+        );
+
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+        let initial_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+        let initial_rev = initial_lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == "review_pkg")
+            .and_then(|package| package.source.rev.clone())
+            .unwrap();
+        let initial_resolution =
+            resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+        let initial_dependency = initial_resolution
+            .packages
+            .iter()
+            .find(|package| package.alias == "review_pkg")
+            .unwrap();
+        let initial_skill_id = namespaced_skill_id(initial_dependency, "review");
+        let initial_skill_path = temp
+            .path()
+            .join(format!(".codex/skills/{initial_skill_id}/SKILL.md"));
+        assert!(initial_skill_path.exists());
+        assert!(
+            fs::read_to_string(&initial_skill_path)
+                .unwrap()
+                .contains("first")
+        );
+
+        write_file(
+            &repo.path().join("skills/review/SKILL.md"),
+            "---\nname: Review\ndescription: Second revision.\n---\n# Review\nsecond\n",
+        );
+        commit_all(repo.path(), "advance");
+
+        sync_in_dir_frozen(temp.path(), cache.path(), false).unwrap();
+
+        let frozen_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+        let frozen_rev = frozen_lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == "review_pkg")
+            .and_then(|package| package.source.rev.clone())
+            .unwrap();
+        assert_eq!(frozen_rev, initial_rev);
+        assert!(initial_skill_path.exists());
+        assert!(
+            fs::read_to_string(&initial_skill_path)
+                .unwrap()
+                .contains("first")
+        );
+
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+        let updated_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+        let updated_rev = updated_lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == "review_pkg")
+            .and_then(|package| package.source.rev.clone())
+            .unwrap();
+        assert_ne!(updated_rev, initial_rev);
+
+        let updated_resolution =
+            resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+        let updated_dependency = updated_resolution
+            .packages
+            .iter()
+            .find(|package| package.alias == "review_pkg")
+            .unwrap();
+        let updated_skill_id = namespaced_skill_id(updated_dependency, "review");
+        let updated_skill_path = temp
+            .path()
+            .join(format!(".codex/skills/{updated_skill_id}/SKILL.md"));
+        assert_ne!(updated_skill_id, initial_skill_id);
+        assert!(!initial_skill_path.exists());
+        assert!(updated_skill_path.exists());
+        assert!(
+            fs::read_to_string(&updated_skill_path)
+                .unwrap()
+                .contains("second")
+        );
     }
 
     #[test]
