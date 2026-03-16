@@ -196,6 +196,10 @@ pub fn build_output_plan(
     let mut plan = OutputAccumulator::default();
 
     for (package, snapshot_root) in packages {
+        if matches!(package.source, PackageSource::Root) {
+            continue;
+        }
+
         warn_if_unsupported(
             &mut plan.warnings,
             package,

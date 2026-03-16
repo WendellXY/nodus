@@ -711,6 +711,10 @@ mod tests {
         file.write_all(contents.as_bytes()).unwrap();
     }
 
+    fn write_manifest(path: &Path, contents: &str) {
+        write_file(&path.join(MANIFEST_FILE), contents);
+    }
+
     fn write_skill(path: &Path, name: &str) {
         write_file(
             &path.join("SKILL.md"),
@@ -824,7 +828,7 @@ shared = { path = "vendor/shared" }
         assert_eq!(lockfile.packages[0].alias, "root");
         assert_eq!(lockfile.packages[1].alias, "shared");
         assert!(
-            lockfile
+            !lockfile
                 .managed_files
                 .contains(&".claude/skills/review".into())
         );
@@ -1137,24 +1141,44 @@ bundled = { path = "vendor/bundled" }
     }
 
     #[test]
-    fn sync_writes_runtime_outputs_from_discovered_layout() {
+    fn sync_emits_dependency_outputs_without_mirroring_root_content() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
         write_skill(&temp.path().join("skills/review"), "Review");
         write_file(&temp.path().join("agents/security.md"), "# Security\n");
         write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
         write_file(&temp.path().join("commands/build.txt"), "cargo test\n");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/checks"), "Checks");
+        write_file(
+            &temp.path().join("vendor/shared/agents/shared.md"),
+            "# Shared\n",
+        );
+        write_file(
+            &temp.path().join("vendor/shared/rules/default.rules"),
+            "allow = []\n",
+        );
+        write_file(
+            &temp.path().join("vendor/shared/commands/build.txt"),
+            "cargo test\n",
+        );
         write_file(&temp.path().join("AGENTS.md"), "user-owned instructions\n");
 
         sync_all(temp.path(), cache.path());
 
         let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
-        let root_package = resolution
+        let dependency = resolution
             .packages
             .iter()
-            .find(|package| package.alias == "root")
+            .find(|package| package.alias == "shared")
             .unwrap();
-        let managed_skill_id = namespaced_skill_id(root_package, "review");
+        let managed_skill_id = namespaced_skill_id(dependency, "checks");
 
         assert!(
             temp.path()
@@ -1166,22 +1190,24 @@ bundled = { path = "vendor/bundled" }
                 .join(format!(".codex/skills/{managed_skill_id}/SKILL.md"))
                 .exists()
         );
-        assert!(temp.path().join(".claude/agents/security.md").exists());
+        assert!(temp.path().join(".claude/agents/shared.md").exists());
         assert!(temp.path().join(".claude/commands/build.md").exists());
         assert!(temp.path().join(".claude/rules/default.md").exists());
         assert!(temp.path().join(".codex/rules/default.rules").exists());
         assert!(
             temp.path()
-                .join(".opencode/skills/review/SKILL.md")
+                .join(".opencode/skills/checks/SKILL.md")
                 .exists()
         );
-        assert!(temp.path().join(".opencode/agents/security.md").exists());
+        assert!(temp.path().join(".opencode/agents/shared.md").exists());
         assert!(temp.path().join(".opencode/commands/build.md").exists());
         assert!(temp.path().join(".opencode/rules/default.md").exists());
+        assert!(!temp.path().join(".claude/agents/security.md").exists());
+        assert!(!temp.path().join(".opencode/agents/security.md").exists());
         assert!(
-            fs::read_to_string(temp.path().join(".opencode/skills/review/SKILL.md"))
+            fs::read_to_string(temp.path().join(".opencode/skills/checks/SKILL.md"))
                 .unwrap()
-                .contains("name: review")
+                .contains("name: checks")
         );
         assert_eq!(
             fs::read_to_string(temp.path().join("AGENTS.md")).unwrap(),
@@ -1203,7 +1229,7 @@ bundled = { path = "vendor/bundled" }
             manifest.manifest.enabled_adapters().unwrap(),
             [Adapter::Codex].as_slice()
         );
-        assert!(temp.path().join(".codex/skills").exists());
+        assert!(!temp.path().join(".codex/skills").exists());
         assert!(!temp.path().join(".claude/skills").exists());
         assert!(!temp.path().join(".opencode/skills").exists());
     }
@@ -1212,18 +1238,28 @@ bundled = { path = "vendor/bundled" }
     fn sync_writes_runtime_gitignores_for_managed_outputs() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+        write_file(
+            &temp.path().join("vendor/shared/rules/default.rules"),
+            "allow = []\n",
+        );
 
         sync_all(temp.path(), cache.path());
 
         let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
-        let root_package = resolution
+        let dependency = resolution
             .packages
             .iter()
-            .find(|package| package.alias == "root")
+            .find(|package| package.alias == "shared")
             .unwrap();
-        let managed_skill_id = namespaced_skill_id(root_package, "review");
+        let managed_skill_id = namespaced_skill_id(dependency, "review");
         let codex_gitignore = fs::read_to_string(temp.path().join(".codex/.gitignore")).unwrap();
 
         assert!(codex_gitignore.contains("# Managed by nodus"));
@@ -1248,9 +1284,9 @@ bundled = { path = "vendor/bundled" }
             manifest.manifest.enabled_adapters().unwrap(),
             [Adapter::Claude, Adapter::OpenCode].as_slice()
         );
-        assert!(temp.path().join(".claude/skills").exists());
+        assert!(!temp.path().join(".claude/skills").exists());
         assert!(!temp.path().join(".codex/skills").exists());
-        assert!(temp.path().join(".opencode/skills").exists());
+        assert!(!temp.path().join(".opencode/skills").exists());
     }
 
     #[test]
@@ -1267,7 +1303,7 @@ bundled = { path = "vendor/bundled" }
             manifest.manifest.enabled_adapters().unwrap(),
             [Adapter::Codex].as_slice()
         );
-        assert!(temp.path().join(".codex/skills").exists());
+        assert!(!temp.path().join(".codex/skills").exists());
         assert!(!temp.path().join(".claude/skills").exists());
         assert!(!temp.path().join(".opencode/skills").exists());
     }
@@ -1301,7 +1337,7 @@ enabled = ["codex"]
 
         sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
 
-        assert!(temp.path().join(".codex/skills").exists());
+        assert!(!temp.path().join(".codex/skills").exists());
         assert!(!temp.path().join(".claude/skills").exists());
     }
 
@@ -1309,7 +1345,14 @@ enabled = ["codex"]
     fn sync_prunes_outputs_when_adapter_selection_is_narrowed() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_skill(&temp.path().join("skills/review"), "Review");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
 
         sync_all(temp.path(), cache.path());
         assert!(temp.path().join(".claude/skills").exists());
@@ -1336,7 +1379,17 @@ enabled = ["codex"]
     fn sync_records_stable_skill_roots_in_lockfile() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_skill(&temp.path().join("skills/iframe-ad"), "Iframe Ad");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(
+            &temp.path().join("vendor/shared/skills/iframe-ad"),
+            "Iframe Ad",
+        );
 
         sync_all(temp.path(), cache.path());
 
@@ -1369,15 +1422,18 @@ enabled = ["codex"]
     fn sync_requires_opt_in_for_high_sensitivity_capabilities() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
+        write_manifest(
+            temp.path(),
             r#"
 [[capabilities]]
 id = "shell.exec"
 sensitivity = "high"
+
+[dependencies]
+shared = { path = "vendor/shared" }
 "#,
         );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
 
         let error =
             sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &Adapter::ALL)
@@ -1387,12 +1443,12 @@ sensitivity = "high"
 
         sync_in_dir_with_adapters(temp.path(), cache.path(), false, true, &Adapter::ALL).unwrap();
         let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
-        let root_package = resolution
+        let dependency = resolution
             .packages
             .iter()
-            .find(|package| package.alias == "root")
+            .find(|package| package.alias == "shared")
             .unwrap();
-        let managed_skill_id = namespaced_skill_id(root_package, "review");
+        let managed_skill_id = namespaced_skill_id(dependency, "review");
         assert!(
             temp.path()
                 .join(format!(".claude/skills/{managed_skill_id}/SKILL.md"))
@@ -1431,10 +1487,26 @@ sensitivity = "high"
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
 
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(&temp.path().join("agents/security.md"), "# Security\n");
-        write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
-        write_file(&temp.path().join("commands/build.txt"), "cargo test\n");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+        write_file(
+            &temp.path().join("vendor/shared/agents/security.md"),
+            "# Security\n",
+        );
+        write_file(
+            &temp.path().join("vendor/shared/rules/default.rules"),
+            "allow = []\n",
+        );
+        write_file(
+            &temp.path().join("vendor/shared/commands/build.txt"),
+            "cargo test\n",
+        );
 
         sync_all(temp.path(), cache.path());
         assert!(temp.path().join(".claude/agents/security.md").exists());
@@ -1444,12 +1516,12 @@ sensitivity = "high"
         assert!(temp.path().join(".opencode/rules/default.md").exists());
         assert!(temp.path().join(".opencode/commands/build.md").exists());
 
-        fs::remove_file(temp.path().join("agents/security.md")).unwrap();
-        fs::remove_dir(temp.path().join("agents")).unwrap();
-        fs::remove_file(temp.path().join("rules/default.rules")).unwrap();
-        fs::remove_dir(temp.path().join("rules")).unwrap();
-        fs::remove_file(temp.path().join("commands/build.txt")).unwrap();
-        fs::remove_dir(temp.path().join("commands")).unwrap();
+        fs::remove_file(temp.path().join("vendor/shared/agents/security.md")).unwrap();
+        fs::remove_dir(temp.path().join("vendor/shared/agents")).unwrap();
+        fs::remove_file(temp.path().join("vendor/shared/rules/default.rules")).unwrap();
+        fs::remove_dir(temp.path().join("vendor/shared/rules")).unwrap();
+        fs::remove_file(temp.path().join("vendor/shared/commands/build.txt")).unwrap();
+        fs::remove_dir(temp.path().join("vendor/shared/commands")).unwrap();
         sync_all(temp.path(), cache.path());
 
         assert!(!temp.path().join(".claude/agents/security.md").exists());
@@ -1464,7 +1536,17 @@ sensitivity = "high"
     fn sync_preserves_user_owned_root_instruction_files() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_file(
+            &temp.path().join("vendor/shared/rules/default.rules"),
+            "allow = []\n",
+        );
         write_file(&temp.path().join("CLAUDE.md"), "user-owned memory\n");
         write_file(&temp.path().join("AGENTS.md"), "user-owned agents\n");
 
@@ -1485,17 +1567,21 @@ sensitivity = "high"
     fn sync_rejects_duplicate_opencode_skill_ids_across_packages() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
+        write_manifest(
+            temp.path(),
             r#"
 [dependencies]
 shared = { path = "vendor/shared" }
+other = { path = "vendor/other" }
 "#,
         );
         write_file(
             &temp.path().join("vendor/shared/skills/review/SKILL.md"),
             "---\nname: Shared Review\ndescription: Different review skill.\n---\n# Shared Review\n",
+        );
+        write_file(
+            &temp.path().join("vendor/other/skills/review/SKILL.md"),
+            "---\nname: Other Review\ndescription: Another review skill.\n---\n# Other Review\n",
         );
 
         let error =
@@ -1510,23 +1596,30 @@ shared = { path = "vendor/shared" }
     fn sync_prunes_old_skill_directories_when_digest_changes() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_skill(&temp.path().join("skills/review"), "Review");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
 
         sync_all(temp.path(), cache.path());
 
         let first_resolution =
             resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
-        let first_root = first_resolution
+        let first_dependency = first_resolution
             .packages
             .iter()
-            .find(|package| package.alias == "root")
+            .find(|package| package.alias == "shared")
             .unwrap();
-        let first_skill_id = namespaced_skill_id(first_root, "review");
+        let first_skill_id = namespaced_skill_id(first_dependency, "review");
         let first_skill_dir = temp.path().join(format!(".claude/skills/{first_skill_id}"));
         assert!(first_skill_dir.exists());
 
         write_file(
-            &temp.path().join("skills/review/SKILL.md"),
+            &temp.path().join("vendor/shared/skills/review/SKILL.md"),
             "---\nname: Review\ndescription: Updated review skill.\n---\n# Review\nchanged\n",
         );
 
@@ -1534,12 +1627,12 @@ shared = { path = "vendor/shared" }
 
         let second_resolution =
             resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
-        let second_root = second_resolution
+        let second_dependency = second_resolution
             .packages
             .iter()
-            .find(|package| package.alias == "root")
+            .find(|package| package.alias == "shared")
             .unwrap();
-        let second_skill_id = namespaced_skill_id(second_root, "review");
+        let second_skill_id = namespaced_skill_id(second_dependency, "review");
         let second_skill_dir = temp
             .path()
             .join(format!(".claude/skills/{second_skill_id}"));
@@ -1553,17 +1646,24 @@ shared = { path = "vendor/shared" }
     fn doctor_detects_missing_file_inside_managed_skill_directory() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
-        write_skill(&temp.path().join("skills/review"), "Review");
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
 
         sync_all(temp.path(), cache.path());
 
         let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
-        let root_package = resolution
+        let dependency = resolution
             .packages
             .iter()
-            .find(|package| package.alias == "root")
+            .find(|package| package.alias == "shared")
             .unwrap();
-        let managed_skill_id = namespaced_skill_id(root_package, "review");
+        let managed_skill_id = namespaced_skill_id(dependency, "review");
         fs::remove_file(
             temp.path()
                 .join(format!(".claude/skills/{managed_skill_id}/SKILL.md")),

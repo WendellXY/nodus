@@ -95,7 +95,7 @@ If the repo does not already contain adapter roots such as `.codex/`, `.claude/`
 nodus add wenext-limited/playbook-ios --adapter codex
 ```
 
-Sync discovered content into managed runtime outputs:
+Sync resolved dependency content into managed runtime outputs:
 
 ```bash
 nodus sync
@@ -201,6 +201,8 @@ Nodus validates and discovers package content by top-level folders:
 - `rules/<id>.*` => rule
 - `commands/<id>.*` => command
 
+When you run Nodus in a repo root, those folders are treated as package source for consumers of that repo. Nodus does not mirror the root project's own `skills/`, `agents/`, `rules/`, or `commands/` into managed runtime folders like `.codex/` or `.claude/`; managed outputs are emitted only for resolved dependencies.
+
 Package validity rules:
 
 - A dependency repo must contain at least one of `skills/`, `agents/`, `rules/`, or `commands/`, or declare at least one dependency in `nodus.toml`
@@ -273,7 +275,7 @@ dependency alias or a repository reference like `owner/repo`.
 
 ### `nodus sync`
 
-Resolves the root project plus configured dependencies, recursively follows nested dependencies declared in dependency manifests, snapshots their discovered content, writes `nodus.lock`, and emits managed runtime outputs.
+Resolves the root project plus configured dependencies, recursively follows nested dependencies declared in dependency manifests, snapshots their discovered content, writes `nodus.lock`, and emits managed runtime outputs for resolved dependencies.
 
 Options:
 
