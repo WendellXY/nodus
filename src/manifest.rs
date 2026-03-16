@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -93,7 +94,31 @@ struct SkillFrontmatter {
 }
 
 pub fn scaffold_init() -> Result<()> {
-    bail!("init is not implemented yet")
+    let cwd = env::current_dir().context("failed to determine the current directory")?;
+    scaffold_init_in_dir(&cwd)
+}
+
+pub fn scaffold_init_in_dir(root: &Path) -> Result<()> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to access {}", root.display()))?;
+    let manifest_path = root.join(MANIFEST_FILE);
+    if manifest_path.exists() {
+        bail!("{} already exists", manifest_path.display());
+    }
+
+    let skill_dir = root.join("skills").join("example");
+    let skill_file = skill_dir.join("SKILL.md");
+    if skill_file.exists() {
+        bail!("{} already exists", skill_file.display());
+    }
+
+    fs::create_dir_all(&skill_dir)
+        .with_context(|| format!("failed to create {}", skill_dir.display()))?;
+    crate::store::write_atomic(&manifest_path, default_manifest_contents(&root).as_bytes())?;
+    crate::store::write_atomic(&skill_file, default_skill_contents().as_bytes())?;
+
+    Ok(())
 }
 
 pub fn load_from_dir(root: &Path) -> Result<LoadedManifest> {
@@ -352,6 +377,42 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
         .with_context(|| format!("failed to canonicalize {}", path.display()))
 }
 
+fn default_manifest_contents(root: &Path) -> String {
+    format!(
+        r#"api_version = "agentpack/v0"
+name = "{}"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "example"
+path = "skills/example"
+"#,
+        default_package_name(root)
+    )
+}
+
+fn default_skill_contents() -> &'static str {
+    "---\nname: Example\ndescription: Describe what this skill helps with.\n---\n# Example\n"
+}
+
+fn default_package_name(root: &Path) -> String {
+    let name = root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("agentpack");
+    let mut normalized = String::new();
+
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+        } else if !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+    }
+
+    normalized.trim_matches('-').to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +533,18 @@ path = "../outside"
 
         let error = load_from_dir(temp.path()).unwrap_err().to_string();
         assert!(error.contains("escapes the package root") || error.contains("missing path"));
+    }
+
+    #[test]
+    fn init_scaffolds_a_manifest_and_example_skill() {
+        let temp = TempDir::new().unwrap();
+
+        scaffold_init_in_dir(temp.path()).unwrap();
+
+        assert!(temp.path().join(MANIFEST_FILE).exists());
+        assert!(temp.path().join("skills/example/SKILL.md").exists());
+
+        let loaded = load_from_dir(temp.path()).unwrap();
+        assert_eq!(loaded.manifest.exports.skills[0].id, "example");
     }
 }

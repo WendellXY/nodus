@@ -46,12 +46,12 @@ pub fn sync(locked: bool, allow_high_sensitivity: bool) -> Result<()> {
 }
 
 pub fn sync_in_dir(cwd: &Path, locked: bool, allow_high_sensitivity: bool) -> Result<()> {
-    let resolution = resolve_project(&cwd)?;
+    let resolution = resolve_project(cwd)?;
     enforce_capabilities(&resolution, allow_high_sensitivity)?;
     let stored_packages = snapshot_resolution(&resolution)?;
     let lockfile = resolution.to_lockfile()?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
-    let existing_state = SyncState::load(&cwd)?;
+    let existing_state = SyncState::load(cwd)?;
 
     let snapshot_by_digest = stored_packages
         .into_iter()
@@ -68,7 +68,7 @@ pub fn sync_in_dir(cwd: &Path, locked: bool, allow_high_sensitivity: bool) -> Re
             Ok((package.clone(), snapshot_root))
         })
         .collect::<Result<Vec<_>>>()?;
-    let planned_files = build_managed_files(&cwd, &package_snapshots)?;
+    let planned_files = build_managed_files(cwd, &package_snapshots)?;
 
     if locked {
         if !lockfile_path.exists() {
@@ -88,14 +88,14 @@ pub fn sync_in_dir(cwd: &Path, locked: bool, allow_high_sensitivity: bool) -> Re
         }
     }
 
-    validate_collisions(&planned_files, &existing_state.owned_paths(&cwd))?;
-    prune_stale_files(&existing_state, &planned_files, &cwd)?;
+    validate_collisions(&planned_files, &existing_state.owned_paths(cwd))?;
+    prune_stale_files(&existing_state, &planned_files, cwd)?;
     write_managed_files(&planned_files)?;
 
     if !locked {
         lockfile.write(&lockfile_path)?;
     }
-    SyncState::save(&cwd, planned_files.iter().map(|file| file.path.clone()))?;
+    SyncState::save(cwd, planned_files.iter().map(|file| file.path.clone()))?;
 
     for warning in &resolution.warnings {
         eprintln!("warning: {warning}");
@@ -105,7 +105,8 @@ pub fn sync_in_dir(cwd: &Path, locked: bool, allow_high_sensitivity: bool) -> Re
 }
 
 pub fn doctor() -> Result<()> {
-    bail!("doctor is not implemented yet")
+    let cwd = env::current_dir().context("failed to determine the current directory")?;
+    doctor_in_dir(&cwd)
 }
 
 pub fn resolve_project(root: &Path) -> Result<Resolution> {
@@ -245,7 +246,7 @@ fn validate_dependency_requirement(
             format!(
                 "dependency `{alias}` in {} has an invalid semver requirement `{requirement}`",
                 display_path(
-                    &parent
+                    parent
                         .root
                         .strip_prefix(project_root)
                         .unwrap_or(&parent.root)
@@ -455,6 +456,37 @@ fn write_managed_files(planned_files: &[ManagedFile]) -> Result<()> {
     Ok(())
 }
 
+pub fn doctor_in_dir(cwd: &Path) -> Result<()> {
+    let resolution = resolve_project(cwd)?;
+    let expected_lockfile = resolution.to_lockfile()?;
+    let lockfile_path = cwd.join(LOCKFILE_NAME);
+    if !lockfile_path.exists() {
+        bail!("missing {}", LOCKFILE_NAME);
+    }
+
+    let existing_lockfile = Lockfile::read(&lockfile_path)?;
+    if existing_lockfile != expected_lockfile {
+        bail!("{LOCKFILE_NAME} is out of date");
+    }
+
+    let existing_state = SyncState::load(cwd)?;
+    let package_roots = resolution
+        .packages
+        .iter()
+        .map(|package| (package.clone(), package.manifest.root.clone()))
+        .collect::<Vec<_>>();
+    let planned_files = build_managed_files(cwd, &package_roots)?;
+
+    validate_collisions(&planned_files, &existing_state.owned_paths(cwd))?;
+    validate_state_consistency(&existing_state, &planned_files, cwd)?;
+
+    for warning in &resolution.warnings {
+        eprintln!("warning: {warning}");
+    }
+
+    Ok(())
+}
+
 fn prune_empty_parent_dirs(path: &Path, project_root: &Path) -> Result<()> {
     let stop_roots = [
         project_root.join(".claude"),
@@ -477,6 +509,30 @@ fn prune_empty_parent_dirs(path: &Path, project_root: &Path) -> Result<()> {
             Err(error) => {
                 return Err(error).with_context(|| format!("failed to prune {}", dir.display()));
             }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_state_consistency(
+    state: &SyncState,
+    planned_files: &[ManagedFile],
+    project_root: &Path,
+) -> Result<()> {
+    let desired_paths = planned_files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<HashSet<_>>();
+    let owned_paths = state.owned_paths(project_root);
+
+    if let Some(path) = owned_paths.difference(&desired_paths).next() {
+        bail!("stale managed state entry for {}", path.display());
+    }
+
+    for path in desired_paths.intersection(&owned_paths) {
+        if !path.exists() {
+            bail!("managed file is missing from disk: {}", path.display());
         }
     }
 
@@ -798,5 +854,64 @@ sensitivity = "high"
 
         sync_in_dir(temp.path(), false, true).unwrap();
         assert!(temp.path().join(".claude/skills/review/SKILL.md").exists());
+    }
+
+    #[test]
+    fn doctor_accepts_a_fresh_sync() {
+        let temp = TempDir::new().unwrap();
+
+        write_skill(&temp.path().join("skills/review"), "Review");
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+api_version = "agentpack/v0"
+name = "root"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "review"
+path = "skills/review"
+"#,
+        );
+
+        sync_in_dir(temp.path(), false, false).unwrap();
+        doctor_in_dir(temp.path()).unwrap();
+    }
+
+    #[test]
+    fn doctor_detects_an_outdated_lockfile() {
+        let temp = TempDir::new().unwrap();
+
+        write_skill(&temp.path().join("skills/review"), "Review");
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+api_version = "agentpack/v0"
+name = "root"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "review"
+path = "skills/review"
+"#,
+        );
+
+        sync_in_dir(temp.path(), false, false).unwrap();
+
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+api_version = "agentpack/v0"
+name = "root"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "renamed"
+path = "skills/review"
+"#,
+        );
+
+        let error = doctor_in_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("out of date"));
     }
 }
