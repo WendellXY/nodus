@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+use crate::adapters::{ManagedFile, build_managed_files};
 use crate::lockfile::{LOCKFILE_NAME, LockedPackage, LockedSource, Lockfile};
 use crate::manifest::{DependencySpec, LoadedManifest, load_from_dir};
-use crate::store::snapshot_resolution;
+use crate::state::SyncState;
+use crate::store::{snapshot_resolution, write_atomic};
 
 #[derive(Debug, Clone)]
 pub struct Resolution {
@@ -40,10 +42,32 @@ struct ResolverState {
 
 pub fn sync(locked: bool, _allow_high_sensitivity: bool) -> Result<()> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
+    sync_in_dir(&cwd, locked)
+}
+
+pub fn sync_in_dir(cwd: &Path, locked: bool) -> Result<()> {
     let resolution = resolve_project(&cwd)?;
-    let _stored_packages = snapshot_resolution(&resolution)?;
+    let stored_packages = snapshot_resolution(&resolution)?;
     let lockfile = resolution.to_lockfile()?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
+    let existing_state = SyncState::load(&cwd)?;
+
+    let snapshot_by_digest = stored_packages
+        .into_iter()
+        .map(|stored| (stored.digest, stored.snapshot_root))
+        .collect::<HashMap<_, _>>();
+    let package_snapshots = resolution
+        .packages
+        .iter()
+        .map(|package| {
+            let snapshot_root = snapshot_by_digest
+                .get(&package.digest)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing snapshot for {}", package.digest))?;
+            Ok((package.clone(), snapshot_root))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let planned_files = build_managed_files(&cwd, &package_snapshots)?;
 
     if locked {
         if !lockfile_path.exists() {
@@ -61,9 +85,16 @@ pub fn sync(locked: bool, _allow_high_sensitivity: bool) -> Result<()> {
                 LOCKFILE_NAME
             );
         }
-    } else {
+    }
+
+    validate_collisions(&planned_files, &existing_state.owned_paths(&cwd))?;
+    prune_stale_files(&existing_state, &planned_files, &cwd)?;
+    write_managed_files(&planned_files)?;
+
+    if !locked {
         lockfile.write(&lockfile_path)?;
     }
+    SyncState::save(&cwd, planned_files.iter().map(|file| file.path.clone()))?;
 
     for warning in &resolution.warnings {
         eprintln!("warning: {warning}");
@@ -347,6 +378,81 @@ fn display_path(path: &Path) -> String {
     }
 }
 
+fn validate_collisions(
+    planned_files: &[ManagedFile],
+    owned_paths: &HashSet<PathBuf>,
+) -> Result<()> {
+    for file in planned_files {
+        if file.path.exists() && !owned_paths.contains(&file.path) {
+            bail!(
+                "refusing to overwrite unmanaged file {}",
+                file.path.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn prune_stale_files(
+    state: &SyncState,
+    planned_files: &[ManagedFile],
+    project_root: &Path,
+) -> Result<()> {
+    let desired_paths = planned_files
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<HashSet<_>>();
+    let owned_paths = state.owned_paths(project_root);
+
+    for path in owned_paths.difference(&desired_paths) {
+        if path.exists() {
+            fs::remove_file(path).with_context(|| {
+                format!("failed to remove stale managed file {}", path.display())
+            })?;
+            prune_empty_parent_dirs(path, project_root)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn write_managed_files(planned_files: &[ManagedFile]) -> Result<()> {
+    for file in planned_files {
+        write_atomic(&file.path, &file.contents)
+            .with_context(|| format!("failed to write managed file {}", file.path.display()))?;
+    }
+    Ok(())
+}
+
+fn prune_empty_parent_dirs(path: &Path, project_root: &Path) -> Result<()> {
+    let stop_roots = [
+        project_root.join(".claude"),
+        project_root.join(".codex"),
+        project_root.join(".opencode"),
+        project_root.join(".agen"),
+    ];
+    let mut current = path.parent();
+
+    while let Some(dir) = current {
+        if stop_roots.iter().any(|root| dir == root) {
+            break;
+        }
+        match fs::remove_dir(dir) {
+            Ok(()) => {
+                current = dir.parent();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to prune {}", dir.display()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -492,5 +598,142 @@ path = "skills/checks"
 
         let error = resolve_project(temp.path()).unwrap_err().to_string();
         assert!(error.contains("conflicting versions for package `shared`"));
+    }
+
+    #[test]
+    fn sync_writes_runtime_outputs_without_touching_agents_md() {
+        let temp = TempDir::new().unwrap();
+
+        write_skill(&temp.path().join("skills/review"), "Review");
+        write_file(
+            &temp.path().join("agents/security-reviewer.md"),
+            "# Security Reviewer\n",
+        );
+        write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
+        write_file(&temp.path().join("AGENTS.md"), "user-owned instructions\n");
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+api_version = "agentpack/v0"
+name = "root"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "review"
+path = "skills/review"
+
+[[exports.agents]]
+id = "security-reviewer"
+path = "agents/security-reviewer.md"
+
+[[exports.rules]]
+id = "default"
+
+[[exports.rules.sources]]
+type = "codex.ruleset"
+path = "rules/default.rules"
+"#,
+        );
+
+        sync_in_dir(temp.path(), false).unwrap();
+
+        assert!(temp.path().join(".claude/skills/review/SKILL.md").exists());
+        assert!(temp.path().join(".codex/skills/review/SKILL.md").exists());
+        assert!(temp.path().join(".codex/rules/default.rules").exists());
+        assert!(
+            temp.path()
+                .join(".opencode/instructions/security-reviewer.md")
+                .exists()
+        );
+        assert!(temp.path().join("opencode.json").exists());
+        assert!(temp.path().join(LOCKFILE_NAME).exists());
+        assert!(temp.path().join(".agen/state.json").exists());
+        assert_eq!(
+            fs::read_to_string(temp.path().join("AGENTS.md")).unwrap(),
+            "user-owned instructions\n"
+        );
+    }
+
+    #[test]
+    fn sync_rejects_unmanaged_collisions() {
+        let temp = TempDir::new().unwrap();
+
+        write_skill(&temp.path().join("skills/review"), "Review");
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+api_version = "agentpack/v0"
+name = "root"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "review"
+path = "skills/review"
+"#,
+        );
+        write_file(
+            &temp.path().join(".claude/skills/review/SKILL.md"),
+            "manually managed\n",
+        );
+
+        let error = sync_in_dir(temp.path(), false).unwrap_err().to_string();
+        assert!(error.contains("refusing to overwrite unmanaged file"));
+    }
+
+    #[test]
+    fn sync_prunes_stale_owned_files() {
+        let temp = TempDir::new().unwrap();
+
+        write_skill(&temp.path().join("skills/review"), "Review");
+        write_file(
+            &temp.path().join("agents/security-reviewer.md"),
+            "# Security Reviewer\n",
+        );
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+api_version = "agentpack/v0"
+name = "root"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "review"
+path = "skills/review"
+
+[[exports.agents]]
+id = "security-reviewer"
+path = "agents/security-reviewer.md"
+"#,
+        );
+
+        sync_in_dir(temp.path(), false).unwrap();
+        assert!(
+            temp.path()
+                .join(".opencode/instructions/security-reviewer.md")
+                .exists()
+        );
+
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+api_version = "agentpack/v0"
+name = "root"
+version = "0.1.0"
+
+[[exports.skills]]
+id = "review"
+path = "skills/review"
+"#,
+        );
+
+        sync_in_dir(temp.path(), false).unwrap();
+
+        assert!(
+            !temp
+                .path()
+                .join(".opencode/instructions/security-reviewer.md")
+                .exists()
+        );
+        assert!(!temp.path().join("opencode.json").exists());
     }
 }

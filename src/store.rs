@@ -7,7 +7,6 @@ use tempfile::NamedTempFile;
 
 use crate::resolver::Resolution;
 
-pub const AGEN_DIR: &str = ".agen";
 pub const STORE_ROOT: &str = ".agen/store/sha256";
 
 #[derive(Debug, Clone)]
