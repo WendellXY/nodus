@@ -2,7 +2,7 @@
 
 Agen is a local-first Rust CLI for managing project-scoped agent packages by convention instead of explicit export configuration.
 
-The current implementation discovers package content from repository folders, supports Git-tag dependencies backed by a shared remote repository cache plus project-local worktrees in `.agen/deps/`, locks exact commits in `agentpack.lock`, snapshots package contents into a content-addressed store, and emits managed runtime outputs for Claude, Codex, and OpenCode.
+The current implementation discovers package content from repository folders, supports Git-tag dependencies backed entirely by a shared remote repository cache and shared cached checkouts, locks exact commits in `agentpack.lock`, snapshots package contents into a content-addressed store, and emits managed runtime outputs for Claude, Codex, and OpenCode.
 
 ## Status
 
@@ -17,7 +17,7 @@ The current MVP supports:
 - Git dependencies pinned by `tag` in the manifest and exact `rev` in the lockfile
 - `agen add <url>` with automatic latest-tag selection
 - `agen add <url> --tag <tag>` for explicit pinning
-- Shared Git repository cache with materialized worktrees under `.agen/deps/`
+- Shared Git repository cache with shared cached checkouts by revision
 - Deterministic `agentpack.lock`
 - Content-addressed snapshots under `.agen/store/sha256/`
 - Managed output emission for:
@@ -92,7 +92,7 @@ If the root project declares any `high` sensitivity capabilities:
 agen sync --allow-high-sensitivity
 ```
 
-Validate that the repo, shared-cache-backed dependency worktrees, lockfile, and owned outputs are all consistent:
+Validate that the repo, shared cached dependencies, lockfile, and owned outputs are all consistent:
 
 ```bash
 agen doctor
@@ -199,7 +199,7 @@ Behavior:
 - accepts a full Git URL or a GitHub shortcut like `wenext-limited/playbook-ios`
 - infers the dependency alias from the repo name
 - fetches a shared bare mirror into the cache root
-- materializes `.agen/deps/<alias>/` as a Git worktree backed by that shared mirror
+- materializes a shared cached checkout for the resolved revision under the cache root
 - resolves the latest tag when `--tag` is omitted
 - checks out the resolved tag
 - validates the discovered package layout
@@ -230,7 +230,7 @@ Options:
 Checks that:
 
 - the root manifest parses
-- dependency worktrees exist under `.agen/deps/`
+- shared cached dependency checkouts exist in the cache root
 - shared repository mirrors exist in the cache root with the expected origin URL
 - discovered layouts are valid
 - Git dependencies are at the expected locked revision
@@ -277,9 +277,9 @@ Sync emits from those snapshots rather than directly from mutable working trees.
 Git dependencies use two on-disk locations:
 
 - Shared remote mirrors live under `<cache-root>/repositories/<repo-name>-<url-hash>.git`
-- Each project gets a local materialized dependency worktree under `.agen/deps/<alias>/`
+- Shared cached checkouts live under `<cache-root>/checkouts/<repo-name>-<url-hash>/<rev>/`
 
-This follows the same general shape as SwiftPM: fetched repository data is shared across projects, while each project still has its own local checkout/worktree state.
+This keeps all fetched and materialized Git dependency state shared across projects. Project-specific state stays limited to each repo's lockfile, content-addressed store, and emitted runtime outputs.
 
 ## Runtime Output Mapping
 
