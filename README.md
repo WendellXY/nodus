@@ -47,7 +47,20 @@ Install the released crate from crates.io:
 cargo install nodus
 ```
 
-Or download a prebuilt binary archive from the GitHub release assets for your platform.
+Install the latest prebuilt binary on macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/refs/heads/main/install.sh | bash
+```
+
+Install a specific release or choose a custom install directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/refs/heads/main/install.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/refs/heads/main/install.sh | bash -s -- --install-dir /usr/local/bin
+```
+
+You can also download a prebuilt binary archive and its `.sha256` file from the GitHub release assets for your platform, then run the root-level `install.sh` locally.
 
 Build or install from the current checkout:
 

@@ -67,6 +67,11 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${staging_dir}/nodus"
           cp README.md LICENSE "${staging_dir}/"
           tar -C dist -czf "dist/${ASSET_BASENAME}.tar.gz" "${ASSET_BASENAME}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "dist/${ASSET_BASENAME}.tar.gz" > "dist/${ASSET_BASENAME}.tar.gz.sha256"
+          else
+            shasum -a 256 "dist/${ASSET_BASENAME}.tar.gz" > "dist/${ASSET_BASENAME}.tar.gz.sha256"
+          fi
 
       - name: Package release archive (Windows)
         if: runner.os == 'Windows'
@@ -77,9 +82,13 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$stagingDir/nodus.exe"
           Copy-Item README.md, LICENSE $stagingDir
           Compress-Archive -Path "$stagingDir/*" -DestinationPath "dist/${env:ASSET_BASENAME}.zip" -Force
+          $hash = (Get-FileHash "dist/${env:ASSET_BASENAME}.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ${env:ASSET_BASENAME}.zip" | Out-File -Encoding ascii "dist/${env:ASSET_BASENAME}.zip.sha256"
 
       - name: Upload release archive
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: dist/${{ env.ASSET_BASENAME }}.${{ matrix.archive_ext }}
+          files: |
+            dist/${{ env.ASSET_BASENAME }}.${{ matrix.archive_ext }}
+            dist/${{ env.ASSET_BASENAME }}.${{ matrix.archive_ext }}.sha256
