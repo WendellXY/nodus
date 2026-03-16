@@ -10,6 +10,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Add {
+        url: String,
+        #[arg(long)]
+        tag: String,
+    },
     Init,
     Sync {
         #[arg(long)]
@@ -24,6 +29,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Add { url, tag } => crate::git::add_dependency(&url, &tag),
         Command::Init => crate::manifest::scaffold_init(),
         Command::Sync {
             locked,

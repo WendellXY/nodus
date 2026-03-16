@@ -142,7 +142,7 @@ mod tests {
 
     use super::*;
     use crate::manifest::MANIFEST_FILE;
-    use crate::resolver::resolve_project;
+    use crate::resolver::resolve_project_for_sync;
 
     fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -172,7 +172,7 @@ path = "skills/review"
 "#,
         );
 
-        let resolution = resolve_project(temp.path()).unwrap();
+        let resolution = resolve_project_for_sync(temp.path()).unwrap();
         let stored = snapshot_resolution(&resolution).unwrap();
 
         assert_eq!(stored.len(), 1);

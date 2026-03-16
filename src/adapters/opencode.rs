@@ -27,7 +27,7 @@ pub fn managed_files(
     let mut files = Vec::new();
     let mut instructions = Vec::new();
 
-    for agent in &package.manifest.manifest.exports.agents {
+    for agent in &package.manifest.discovered.agents {
         let target_relative = format!(".opencode/instructions/{}.md", agent.id);
         let source_path = snapshot_root.join(&agent.path);
         files.push(ManagedFile {

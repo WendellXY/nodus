@@ -2,14 +2,13 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::Capability;
 use crate::store::write_atomic;
 
 pub const LOCKFILE_NAME: &str = "agentpack.lock";
-const LOCKFILE_VERSION: u32 = 1;
+const LOCKFILE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lockfile {
@@ -19,8 +18,10 @@ pub struct Lockfile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LockedPackage {
+    pub alias: String,
     pub name: String,
-    pub package_version: Version,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_tag: Option<String>,
     pub source: LockedSource,
     pub digest: String,
     #[serde(default)]
@@ -30,6 +31,8 @@ pub struct LockedPackage {
     #[serde(default)]
     pub rules: Vec<String>,
     #[serde(default)]
+    pub commands: Vec<String>,
+    #[serde(default)]
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub capabilities: Vec<Capability>,
@@ -38,16 +41,27 @@ pub struct LockedPackage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LockedSource {
     pub kind: String,
-    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
 }
 
 impl Lockfile {
     pub fn new(mut packages: Vec<LockedPackage>) -> Self {
         packages.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then(left.package_version.cmp(&right.package_version))
+            left.alias
+                .cmp(&right.alias)
+                .then(left.name.cmp(&right.name))
+                .then(left.source.kind.cmp(&right.source.kind))
                 .then(left.source.path.cmp(&right.source.path))
+                .then(left.source.url.cmp(&right.source.url))
+                .then(left.source.tag.cmp(&right.source.tag))
+                .then(left.source.rev.cmp(&right.source.rev))
         });
         Self {
             version: LOCKFILE_VERSION,
@@ -76,17 +90,22 @@ mod tests {
     #[test]
     fn round_trips_lockfile_as_toml() {
         let lockfile = Lockfile::new(vec![LockedPackage {
-            name: "example".into(),
-            package_version: Version::new(0, 1, 0),
+            alias: "playbook_ios".into(),
+            name: "playbook-ios".into(),
+            version_tag: Some("v0.1.0".into()),
             source: LockedSource {
-                kind: "path".into(),
-                path: ".".into(),
+                kind: "git".into(),
+                path: None,
+                url: Some("https://github.com/wenext-limited/playbook-ios".into()),
+                tag: Some("v0.1.0".into()),
+                rev: Some("abc123".into()),
             },
             digest: "sha256:abc".into(),
             skills: vec!["review".into()],
             agents: vec!["security-reviewer".into()],
             rules: vec!["safe-shell".into()],
-            dependencies: vec!["shared".into()],
+            commands: vec!["build".into()],
+            dependencies: vec![],
             capabilities: vec![Capability {
                 id: "shell.exec".into(),
                 sensitivity: "high".into(),

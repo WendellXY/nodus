@@ -13,7 +13,7 @@ pub fn managed_files(
 ) -> Result<Vec<ManagedFile>> {
     let mut files = Vec::new();
 
-    for skill in &package.manifest.manifest.exports.skills {
+    for skill in &package.manifest.discovered.skills {
         let source_root = snapshot_root.join(&skill.path);
         for entry in walkdir::WalkDir::new(&source_root) {
             let entry = entry?;

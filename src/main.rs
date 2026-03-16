@@ -1,5 +1,6 @@
 mod adapters;
 mod cli;
+mod git;
 mod lockfile;
 mod manifest;
 mod resolver;

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,8 +7,12 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::adapters::{ManagedFile, build_managed_files};
+use crate::git::{current_rev, ensure_git_dependency};
 use crate::lockfile::{LOCKFILE_NAME, LockedPackage, LockedSource, Lockfile};
-use crate::manifest::{DependencySpec, LoadedManifest, load_from_dir};
+use crate::manifest::{
+    DependencySourceKind, DependencySpec, LoadedManifest, PackageRole, load_dependency_from_dir,
+    load_root_from_dir,
+};
 use crate::state::SyncState;
 use crate::store::{snapshot_resolution, write_atomic};
 
@@ -21,23 +25,37 @@ pub struct Resolution {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedPackage {
+    pub alias: String,
     pub root: PathBuf,
     pub manifest: LoadedManifest,
+    pub source: PackageSource,
     pub digest: String,
 }
 
-#[derive(Debug, Clone)]
-struct SeenPackage {
-    version: semver::Version,
-    digest: String,
-    root: PathBuf,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageSource {
+    Root,
+    Path {
+        path: PathBuf,
+        tag: Option<String>,
+    },
+    Git {
+        url: String,
+        tag: String,
+        rev: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolveMode {
+    Sync,
+    Doctor,
 }
 
 #[derive(Debug, Default)]
 struct ResolverState {
     stack: Vec<PathBuf>,
     resolved_by_path: HashMap<PathBuf, ResolvedPackage>,
-    seen_by_name: BTreeMap<String, SeenPackage>,
 }
 
 pub fn sync(locked: bool, allow_high_sensitivity: bool) -> Result<()> {
@@ -46,7 +64,7 @@ pub fn sync(locked: bool, allow_high_sensitivity: bool) -> Result<()> {
 }
 
 pub fn sync_in_dir(cwd: &Path, locked: bool, allow_high_sensitivity: bool) -> Result<()> {
-    let resolution = resolve_project(cwd)?;
+    let resolution = resolve_project(cwd, ResolveMode::Sync)?;
     enforce_capabilities(&resolution, allow_high_sensitivity)?;
     let stored_packages = snapshot_resolution(&resolution)?;
     let lockfile = resolution.to_lockfile()?;
@@ -109,25 +127,74 @@ pub fn doctor() -> Result<()> {
     doctor_in_dir(&cwd)
 }
 
-pub fn resolve_project(root: &Path) -> Result<Resolution> {
+pub fn resolve_project_for_sync(root: &Path) -> Result<Resolution> {
+    resolve_project(root, ResolveMode::Sync)
+}
+
+pub fn doctor_in_dir(cwd: &Path) -> Result<()> {
+    let resolution = resolve_project(cwd, ResolveMode::Doctor)?;
+    let expected_lockfile = resolution.to_lockfile()?;
+    let lockfile_path = cwd.join(LOCKFILE_NAME);
+    if !lockfile_path.exists() {
+        bail!("missing {}", LOCKFILE_NAME);
+    }
+
+    let existing_lockfile = Lockfile::read(&lockfile_path)?;
+    if existing_lockfile != expected_lockfile {
+        bail!("{LOCKFILE_NAME} is out of date");
+    }
+
+    let existing_state = SyncState::load(cwd)?;
+    let package_roots = resolution
+        .packages
+        .iter()
+        .map(|package| (package.clone(), package.root.clone()))
+        .collect::<Vec<_>>();
+    let planned_files = build_managed_files(cwd, &package_roots)?;
+
+    validate_collisions(&planned_files, &existing_state.owned_paths(cwd))?;
+    validate_state_consistency(&existing_state, &planned_files, cwd)?;
+
+    for package in &resolution.packages {
+        if let PackageSource::Git { rev, .. } = &package.source {
+            let current = current_rev(&package.root)?;
+            if current.trim() != rev {
+                bail!(
+                    "git dependency `{}` is checked out at {} instead of {}",
+                    package.alias,
+                    current.trim(),
+                    rev
+                );
+            }
+        }
+    }
+
+    for warning in &resolution.warnings {
+        eprintln!("warning: {warning}");
+    }
+
+    Ok(())
+}
+
+fn resolve_project(root: &Path, mode: ResolveMode) -> Result<Resolution> {
     let project_root = root
         .canonicalize()
         .with_context(|| format!("failed to access {}", root.display()))?;
     let mut state = ResolverState::default();
-    resolve_package(&project_root, &project_root, &mut state)?;
+    resolve_package(
+        &project_root,
+        "root".to_string(),
+        project_root.clone(),
+        PackageSource::Root,
+        PackageRole::Root,
+        mode,
+        &mut state,
+    )?;
 
     let mut packages: Vec<_> = state.resolved_by_path.into_values().collect();
     packages.sort_by(|left, right| {
-        left.manifest
-            .manifest
-            .name
-            .cmp(&right.manifest.manifest.name)
-            .then(
-                left.manifest
-                    .manifest
-                    .version
-                    .cmp(&right.manifest.manifest.version),
-            )
+        left.alias
+            .cmp(&right.alias)
             .then(left.root.cmp(&right.root))
     });
 
@@ -145,164 +212,121 @@ pub fn resolve_project(root: &Path) -> Result<Resolution> {
 
 fn resolve_package(
     project_root: &Path,
-    package_root: &Path,
+    alias: String,
+    package_root: PathBuf,
+    source: PackageSource,
+    role: PackageRole,
+    mode: ResolveMode,
     state: &mut ResolverState,
 ) -> Result<ResolvedPackage> {
-    if let Some(existing) = state.resolved_by_path.get(package_root) {
+    if let Some(existing) = state.resolved_by_path.get(&package_root) {
         return Ok(existing.clone());
     }
 
-    if state.stack.iter().any(|path| path == package_root) {
+    if state.stack.iter().any(|path| path == &package_root) {
         let cycle = state
             .stack
             .iter()
-            .chain(std::iter::once(&package_root.to_path_buf()))
+            .chain(std::iter::once(&package_root))
             .map(|path| display_path(path))
             .collect::<Vec<_>>()
             .join(" -> ");
         bail!("dependency cycle detected: {cycle}");
     }
 
-    state.stack.push(package_root.to_path_buf());
+    state.stack.push(package_root.clone());
 
-    let manifest = load_from_dir(package_root)?;
-    let dependency_paths = manifest
+    let manifest = match role {
+        PackageRole::Root => load_root_from_dir(&package_root)?,
+        PackageRole::Dependency => load_dependency_from_dir(&package_root)?,
+    };
+
+    let dependencies = manifest
         .manifest
         .dependencies
-        .agentpacks
         .iter()
-        .map(|(name, dependency)| resolve_dependency(&manifest, name, dependency))
+        .map(|(dependency_alias, dependency)| {
+            resolve_dependency(
+                project_root,
+                &manifest,
+                dependency_alias,
+                dependency,
+                mode,
+                state,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut dependency_names = HashSet::new();
-    for (name, dependency_root) in &dependency_paths {
-        if !dependency_names.insert(name.clone()) {
-            bail!(
-                "duplicate dependency alias `{name}` in {}",
-                manifest.root.display()
-            );
-        }
-        let dependency = resolve_package(project_root, dependency_root, state)?;
-        validate_dependency_requirement(
-            &manifest,
-            name,
-            &dependency.manifest.manifest,
-            project_root,
-        )?;
-    }
-
     let digest = compute_package_digest(&manifest)?;
-    register_package_identity(
-        &manifest.manifest.name,
-        &manifest.manifest.version,
-        &digest,
-        &manifest.root,
-        &mut state.seen_by_name,
-    )?;
-
     let resolved = ResolvedPackage {
-        root: package_root.to_path_buf(),
+        alias,
+        root: package_root.clone(),
         manifest,
+        source,
         digest,
     };
     state
         .resolved_by_path
-        .insert(package_root.to_path_buf(), resolved.clone());
+        .insert(package_root.clone(), resolved.clone());
     state.stack.pop();
+
+    drop(dependencies);
 
     Ok(resolved)
 }
 
 fn resolve_dependency(
-    manifest: &LoadedManifest,
-    name: &str,
-    dependency: &DependencySpec,
-) -> Result<(String, PathBuf)> {
-    let dependency_root = manifest
-        .resolve_path(&dependency.path)
-        .with_context(|| format!("failed to resolve dependency `{name}`"))?;
-    if !dependency_root.starts_with(&manifest.root) {
-        bail!(
-            "dependency `{name}` path `{}` escapes the package root {}",
-            dependency.path.display(),
-            manifest.root.display()
-        );
-    }
-    Ok((name.to_string(), dependency_root))
-}
-
-fn validate_dependency_requirement(
+    project_root: &Path,
     parent: &LoadedManifest,
     alias: &str,
-    dependency_manifest: &crate::manifest::Manifest,
-    project_root: &Path,
-) -> Result<()> {
-    let Some(spec) = parent.manifest.dependencies.agentpacks.get(alias) else {
-        bail!("missing dependency metadata for `{alias}`");
-    };
-
-    if let Some(requirement) = &spec.requirement {
-        let parsed = semver::VersionReq::parse(requirement).with_context(|| {
-            format!(
-                "dependency `{alias}` in {} has an invalid semver requirement `{requirement}`",
-                display_path(
-                    parent
-                        .root
-                        .strip_prefix(project_root)
-                        .unwrap_or(&parent.root)
-                )
+    dependency: &DependencySpec,
+    mode: ResolveMode,
+    state: &mut ResolverState,
+) -> Result<ResolvedPackage> {
+    match dependency.source_kind()? {
+        DependencySourceKind::Path => {
+            let path = dependency
+                .path
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("dependency `{alias}` must declare `path`"))?;
+            let dependency_root = parent
+                .resolve_path(path)
+                .with_context(|| format!("failed to resolve dependency `{alias}`"))?;
+            let source = PackageSource::Path {
+                path: dependency_root.clone(),
+                tag: dependency.tag.clone(),
+            };
+            resolve_package(
+                project_root,
+                alias.to_string(),
+                dependency_root,
+                source,
+                PackageRole::Dependency,
+                mode,
+                state,
             )
-        })?;
-        if !parsed.matches(&dependency_manifest.version) {
-            bail!(
-                "dependency `{alias}` requires `{}` but resolved {} {}",
-                requirement,
-                dependency_manifest.name,
-                dependency_manifest.version
-            );
+        }
+        DependencySourceKind::Git => {
+            let url = dependency.url.as_deref().unwrap_or_default();
+            let tag = dependency.tag.as_deref().unwrap_or_default();
+            let checkout =
+                ensure_git_dependency(project_root, alias, url, tag, mode == ResolveMode::Sync)?;
+            let source = PackageSource::Git {
+                url: checkout.url,
+                tag: checkout.tag,
+                rev: checkout.rev,
+            };
+            resolve_package(
+                project_root,
+                alias.to_string(),
+                checkout.path,
+                source,
+                PackageRole::Dependency,
+                mode,
+                state,
+            )
         }
     }
-
-    Ok(())
-}
-
-fn register_package_identity(
-    name: &str,
-    version: &semver::Version,
-    digest: &str,
-    root: &Path,
-    seen_by_name: &mut BTreeMap<String, SeenPackage>,
-) -> Result<()> {
-    if let Some(existing) = seen_by_name.get(name) {
-        if existing.version != *version {
-            bail!(
-                "conflicting versions for package `{name}`: {} at {} and {} at {}",
-                existing.version,
-                display_path(&existing.root),
-                version,
-                display_path(root)
-            );
-        }
-        if existing.digest != digest {
-            bail!(
-                "package `{name}` version {} resolves to different contents at {} and {}",
-                version,
-                display_path(&existing.root),
-                display_path(root)
-            );
-        }
-    } else {
-        seen_by_name.insert(
-            name.to_string(),
-            SeenPackage {
-                version: version.clone(),
-                digest: digest.to_string(),
-                root: root.to_path_buf(),
-            },
-        );
-    }
-
-    Ok(())
 }
 
 fn compute_package_digest(manifest: &LoadedManifest) -> Result<String> {
@@ -331,34 +355,87 @@ impl Resolution {
         let mut packages = Vec::new();
 
         for package in &self.packages {
-            let relative_root = package
-                .root
-                .strip_prefix(&self.project_root)
-                .unwrap_or(&package.root);
-            let source_path = if relative_root.as_os_str().is_empty() {
-                ".".to_string()
-            } else {
-                display_path(relative_root)
+            let source = match &package.source {
+                PackageSource::Root => LockedSource {
+                    kind: "path".into(),
+                    path: Some(".".into()),
+                    url: None,
+                    tag: None,
+                    rev: None,
+                },
+                PackageSource::Path { path, tag } => LockedSource {
+                    kind: "path".into(),
+                    path: Some(display_path(
+                        path.strip_prefix(&self.project_root).unwrap_or(path),
+                    )),
+                    url: None,
+                    tag: tag.clone(),
+                    rev: None,
+                },
+                PackageSource::Git { url, tag, rev } => LockedSource {
+                    kind: "git".into(),
+                    path: None,
+                    url: Some(url.clone()),
+                    tag: Some(tag.clone()),
+                    rev: Some(rev.clone()),
+                },
             };
 
-            let manifest = &package.manifest.manifest;
-            let mut dependencies: Vec<_> =
-                manifest.dependencies.agentpacks.keys().cloned().collect();
+            let mut dependencies: Vec<_> = package
+                .manifest
+                .manifest
+                .dependencies
+                .keys()
+                .cloned()
+                .collect();
             dependencies.sort();
 
             packages.push(LockedPackage {
-                name: manifest.name.clone(),
-                package_version: manifest.version.clone(),
-                source: LockedSource {
-                    kind: "path".into(),
-                    path: source_path,
+                alias: package.alias.clone(),
+                name: package.manifest.effective_name(),
+                version_tag: match &package.source {
+                    PackageSource::Git { tag, .. } => Some(tag.clone()),
+                    PackageSource::Path { tag, .. } => tag.clone(),
+                    PackageSource::Root => {
+                        package.manifest.effective_version().map(|v| v.to_string())
+                    }
                 },
+                source,
                 digest: package.digest.clone(),
-                skills: sorted_ids(manifest.exports.skills.iter().map(|item| &item.id)),
-                agents: sorted_ids(manifest.exports.agents.iter().map(|item| &item.id)),
-                rules: sorted_ids(manifest.exports.rules.iter().map(|item| &item.id)),
+                skills: sorted_ids(
+                    package
+                        .manifest
+                        .discovered
+                        .skills
+                        .iter()
+                        .map(|item| &item.id),
+                ),
+                agents: sorted_ids(
+                    package
+                        .manifest
+                        .discovered
+                        .agents
+                        .iter()
+                        .map(|item| &item.id),
+                ),
+                rules: sorted_ids(
+                    package
+                        .manifest
+                        .discovered
+                        .rules
+                        .iter()
+                        .map(|item| &item.id),
+                ),
+                commands: sorted_ids(
+                    package
+                        .manifest
+                        .discovered
+                        .commands
+                        .iter()
+                        .map(|item| &item.id),
+                ),
                 dependencies,
-                capabilities: manifest.capabilities.clone(),
+                capabilities: package.manifest.manifest.capabilities.clone(),
             });
         }
 
@@ -387,13 +464,10 @@ fn enforce_capabilities(resolution: &Resolution, allow_high_sensitivity: bool) -
         for capability in &package.manifest.manifest.capabilities {
             eprintln!(
                 "capability: {} {} ({})",
-                package.manifest.manifest.name, capability.id, capability.sensitivity
+                package.alias, capability.id, capability.sensitivity
             );
             if capability.sensitivity.eq_ignore_ascii_case("high") {
-                high_sensitivity.push(format!(
-                    "{}:{}",
-                    package.manifest.manifest.name, capability.id
-                ));
+                high_sensitivity.push(format!("{}:{}", package.alias, capability.id));
             }
         }
     }
@@ -456,32 +530,25 @@ fn write_managed_files(planned_files: &[ManagedFile]) -> Result<()> {
     Ok(())
 }
 
-pub fn doctor_in_dir(cwd: &Path) -> Result<()> {
-    let resolution = resolve_project(cwd)?;
-    let expected_lockfile = resolution.to_lockfile()?;
-    let lockfile_path = cwd.join(LOCKFILE_NAME);
-    if !lockfile_path.exists() {
-        bail!("missing {}", LOCKFILE_NAME);
-    }
-
-    let existing_lockfile = Lockfile::read(&lockfile_path)?;
-    if existing_lockfile != expected_lockfile {
-        bail!("{LOCKFILE_NAME} is out of date");
-    }
-
-    let existing_state = SyncState::load(cwd)?;
-    let package_roots = resolution
-        .packages
+fn validate_state_consistency(
+    state: &SyncState,
+    planned_files: &[ManagedFile],
+    project_root: &Path,
+) -> Result<()> {
+    let desired_paths = planned_files
         .iter()
-        .map(|package| (package.clone(), package.manifest.root.clone()))
-        .collect::<Vec<_>>();
-    let planned_files = build_managed_files(cwd, &package_roots)?;
+        .map(|file| file.path.clone())
+        .collect::<HashSet<_>>();
+    let owned_paths = state.owned_paths(project_root);
 
-    validate_collisions(&planned_files, &existing_state.owned_paths(cwd))?;
-    validate_state_consistency(&existing_state, &planned_files, cwd)?;
+    if let Some(path) = owned_paths.difference(&desired_paths).next() {
+        bail!("stale managed state entry for {}", path.display());
+    }
 
-    for warning in &resolution.warnings {
-        eprintln!("warning: {warning}");
+    for path in desired_paths.intersection(&owned_paths) {
+        if !path.exists() {
+            bail!("managed file is missing from disk: {}", path.display());
+        }
     }
 
     Ok(())
@@ -515,38 +582,16 @@ fn prune_empty_parent_dirs(path: &Path, project_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_state_consistency(
-    state: &SyncState,
-    planned_files: &[ManagedFile],
-    project_root: &Path,
-) -> Result<()> {
-    let desired_paths = planned_files
-        .iter()
-        .map(|file| file.path.clone())
-        .collect::<HashSet<_>>();
-    let owned_paths = state.owned_paths(project_root);
-
-    if let Some(path) = owned_paths.difference(&desired_paths).next() {
-        bail!("stale managed state entry for {}", path.display());
-    }
-
-    for path in desired_paths.intersection(&owned_paths) {
-        if !path.exists() {
-            bail!("managed file is missing from disk: {}", path.display());
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::process::Command;
 
     use tempfile::TempDir;
 
     use super::*;
-    use crate::manifest::MANIFEST_FILE;
+    use crate::git::add_dependency;
+    use crate::manifest::{MANIFEST_FILE, load_root_from_dir};
 
     fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -563,163 +608,116 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolves_local_dependencies_into_a_deterministic_lockfile() {
-        let temp = TempDir::new().unwrap();
+    fn init_git_repo(path: &Path) {
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
 
+        run(&["init"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test User"]);
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
+    }
+
+    fn create_git_dependency() -> (TempDir, String) {
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        write_file(&repo.path().join("agents/security.md"), "# Security\n");
+        init_git_repo(repo.path());
+
+        let output = Command::new("git")
+            .args(["tag", "v0.1.0"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let url = repo.path().to_string_lossy().to_string();
+        (repo, url)
+    }
+
+    #[test]
+    fn resolves_local_path_dependencies_with_discovery() {
+        let temp = TempDir::new().unwrap();
         write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
         write_file(
             &temp.path().join(MANIFEST_FILE),
             r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-
-[[exports.rules]]
-id = "default"
-
-[[exports.rules.sources]]
-type = "codex.ruleset"
-path = "rules/default.rules"
-
-[dependencies.agentpacks.shared]
-path = "vendor/shared"
-requirement = "^1.0.0"
+[dependencies]
+shared = { path = "vendor/shared" }
 "#,
         );
 
         write_skill(&temp.path().join("vendor/shared/skills/checks"), "Checks");
-        write_file(
-            &temp.path().join("vendor/shared/agentpack.toml"),
-            r#"
-api_version = "agentpack/v0"
-name = "shared"
-version = "1.2.0"
 
-[[exports.skills]]
-id = "checks"
-path = "skills/checks"
-"#,
-        );
-
-        let resolution = resolve_project(temp.path()).unwrap();
+        let resolution = resolve_project(temp.path(), ResolveMode::Sync).unwrap();
         let lockfile = resolution.to_lockfile().unwrap();
 
         assert_eq!(lockfile.packages.len(), 2);
-        assert_eq!(lockfile.packages[0].name, "root");
-        assert_eq!(lockfile.packages[1].name, "shared");
+        assert_eq!(lockfile.packages[0].alias, "root");
+        assert_eq!(lockfile.packages[1].alias, "shared");
     }
 
     #[test]
-    fn rejects_dependency_cycles() {
+    fn add_dependency_clones_repo_and_updates_manifest() {
         let temp = TempDir::new().unwrap();
+        let (_repo, url) = create_git_dependency();
 
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
+        let previous = env::current_dir().unwrap();
+        env::set_current_dir(temp.path()).unwrap();
+        add_dependency(&url, "v0.1.0").unwrap();
+        env::set_current_dir(previous).unwrap();
 
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-
-[dependencies.agentpacks.self_ref]
-path = "."
-"#,
-        );
-
-        let error = resolve_project(temp.path()).unwrap_err().to_string();
-        assert!(error.contains("dependency cycle detected"));
+        assert!(temp.path().join(".agen/deps/review").exists() == false);
+        assert!(temp.path().join(".agen/deps").exists());
+        let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("[dependencies]"));
+        assert!(manifest.contains("tag = \"v0.1.0\""));
     }
 
     #[test]
-    fn rejects_conflicting_versions_for_the_same_package_name() {
+    fn add_dependency_rejects_repo_without_supported_directories() {
         let temp = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_file(&repo.path().join("README.md"), "hello\n");
+        init_git_repo(repo.path());
+        Command::new("git")
+            .args(["tag", "v0.1.0"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
 
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
+        let previous = env::current_dir().unwrap();
+        env::set_current_dir(temp.path()).unwrap();
+        let error = add_dependency(&repo.path().to_string_lossy(), "v0.1.0")
+            .unwrap_err()
+            .to_string();
+        env::set_current_dir(previous).unwrap();
 
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-
-[dependencies.agentpacks.one]
-path = "deps/one"
-
-[dependencies.agentpacks.two]
-path = "deps/two"
-"#,
-        );
-
-        for (path, version) in [("deps/one", "1.0.0"), ("deps/two", "2.0.0")] {
-            write_skill(&temp.path().join(path).join("skills/checks"), "Checks");
-            write_file(
-                &temp.path().join(path).join(MANIFEST_FILE),
-                &format!(
-                    r#"
-api_version = "agentpack/v0"
-name = "shared"
-version = "{version}"
-
-[[exports.skills]]
-id = "checks"
-path = "skills/checks"
-"#
-                ),
-            );
-        }
-
-        let error = resolve_project(temp.path()).unwrap_err().to_string();
-        assert!(error.contains("conflicting versions for package `shared`"));
+        assert!(error.contains("does not match the Agen package layout"));
     }
 
     #[test]
-    fn sync_writes_runtime_outputs_without_touching_agents_md() {
+    fn sync_writes_runtime_outputs_from_discovered_layout() {
         let temp = TempDir::new().unwrap();
-
         write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join("agents/security-reviewer.md"),
-            "# Security Reviewer\n",
-        );
+        write_file(&temp.path().join("agents/security.md"), "# Security\n");
         write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
         write_file(&temp.path().join("AGENTS.md"), "user-owned instructions\n");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-
-[[exports.agents]]
-id = "security-reviewer"
-path = "agents/security-reviewer.md"
-
-[[exports.rules]]
-id = "default"
-
-[[exports.rules.sources]]
-type = "codex.ruleset"
-path = "rules/default.rules"
-"#,
-        );
 
         sync_in_dir(temp.path(), false, false).unwrap();
 
@@ -728,12 +726,9 @@ path = "rules/default.rules"
         assert!(temp.path().join(".codex/rules/default.rules").exists());
         assert!(
             temp.path()
-                .join(".opencode/instructions/security-reviewer.md")
+                .join(".opencode/instructions/security.md")
                 .exists()
         );
-        assert!(temp.path().join("opencode.json").exists());
-        assert!(temp.path().join(LOCKFILE_NAME).exists());
-        assert!(temp.path().join(".agen/state.json").exists());
         assert_eq!(
             fs::read_to_string(temp.path().join("AGENTS.md")).unwrap(),
             "user-owned instructions\n"
@@ -741,106 +736,12 @@ path = "rules/default.rules"
     }
 
     #[test]
-    fn sync_rejects_unmanaged_collisions() {
-        let temp = TempDir::new().unwrap();
-
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-"#,
-        );
-        write_file(
-            &temp.path().join(".claude/skills/review/SKILL.md"),
-            "manually managed\n",
-        );
-
-        let error = sync_in_dir(temp.path(), false, false)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("refusing to overwrite unmanaged file"));
-    }
-
-    #[test]
-    fn sync_prunes_stale_owned_files() {
-        let temp = TempDir::new().unwrap();
-
-        write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join("agents/security-reviewer.md"),
-            "# Security Reviewer\n",
-        );
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-
-[[exports.agents]]
-id = "security-reviewer"
-path = "agents/security-reviewer.md"
-"#,
-        );
-
-        sync_in_dir(temp.path(), false, false).unwrap();
-        assert!(
-            temp.path()
-                .join(".opencode/instructions/security-reviewer.md")
-                .exists()
-        );
-
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-"#,
-        );
-
-        sync_in_dir(temp.path(), false, false).unwrap();
-
-        assert!(
-            !temp
-                .path()
-                .join(".opencode/instructions/security-reviewer.md")
-                .exists()
-        );
-        assert!(!temp.path().join("opencode.json").exists());
-    }
-
-    #[test]
     fn sync_requires_opt_in_for_high_sensitivity_capabilities() {
         let temp = TempDir::new().unwrap();
-
         write_skill(&temp.path().join("skills/review"), "Review");
         write_file(
             &temp.path().join(MANIFEST_FILE),
             r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-
 [[capabilities]]
 id = "shell.exec"
 sensitivity = "high"
@@ -853,65 +754,53 @@ sensitivity = "high"
         assert!(error.contains("--allow-high-sensitivity"));
 
         sync_in_dir(temp.path(), false, true).unwrap();
-        assert!(temp.path().join(".claude/skills/review/SKILL.md").exists());
     }
 
     #[test]
-    fn doctor_accepts_a_fresh_sync() {
+    fn sync_prunes_stale_managed_files() {
         let temp = TempDir::new().unwrap();
 
         write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-"#,
-        );
+        write_file(&temp.path().join("agents/security.md"), "# Security\n");
 
         sync_in_dir(temp.path(), false, false).unwrap();
-        doctor_in_dir(temp.path()).unwrap();
+        assert!(
+            temp.path()
+                .join(".opencode/instructions/security.md")
+                .exists()
+        );
+
+        fs::remove_file(temp.path().join("agents/security.md")).unwrap();
+        fs::remove_dir(temp.path().join("agents")).unwrap();
+        sync_in_dir(temp.path(), false, false).unwrap();
+
+        assert!(
+            !temp
+                .path()
+                .join(".opencode/instructions/security.md")
+                .exists()
+        );
     }
 
     #[test]
-    fn doctor_detects_an_outdated_lockfile() {
+    fn doctor_detects_lockfile_drift() {
         let temp = TempDir::new().unwrap();
-
         write_skill(&temp.path().join("skills/review"), "Review");
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-"#,
-        );
-
         sync_in_dir(temp.path(), false, false).unwrap();
 
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "renamed"
-path = "skills/review"
-"#,
-        );
+        write_skill(&temp.path().join("skills/renamed"), "Renamed");
 
         let error = doctor_in_dir(temp.path()).unwrap_err().to_string();
         assert!(error.contains("out of date"));
+    }
+
+    #[test]
+    fn root_manifest_can_be_missing() {
+        let temp = TempDir::new().unwrap();
+        write_skill(&temp.path().join("skills/review"), "Review");
+
+        let loaded = load_root_from_dir(temp.path()).unwrap();
+        assert!(loaded.manifest.dependencies.is_empty());
+        assert_eq!(loaded.discovered.skills[0].id, "review");
     }
 }

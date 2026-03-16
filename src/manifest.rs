@@ -10,52 +10,18 @@ use toml::Table;
 
 pub const MANIFEST_FILE: &str = "agentpack.toml";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Manifest {
-    pub api_version: String,
-    pub name: String,
-    pub version: Version,
-    pub exports: Exports,
-    #[serde(default)]
-    pub capabilities: Vec<Capability>,
-    #[serde(default)]
-    pub dependencies: Dependencies,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Exports {
-    #[serde(default)]
-    pub skills: Vec<SkillExport>,
-    #[serde(default)]
-    pub agents: Vec<AgentExport>,
-    #[serde(default)]
-    pub rules: Vec<RuleExport>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillExport {
-    pub id: String,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentExport {
-    pub id: String,
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuleExport {
-    pub id: String,
-    #[serde(default)]
-    pub sources: Vec<RuleSource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuleSource {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub path: PathBuf,
+pub struct Manifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<Version>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<String, DependencySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,25 +32,55 @@ pub struct Capability {
     pub justification: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Dependencies {
-    #[serde(default)]
-    pub agentpacks: BTreeMap<String, DependencySpec>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencySpec {
-    pub path: PathBuf,
-    #[serde(default)]
-    pub requirement: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencySourceKind {
+    Git,
+    Path,
 }
 
 #[derive(Debug, Clone)]
 pub struct LoadedManifest {
     pub root: PathBuf,
-    pub manifest_path: PathBuf,
+    pub manifest_path: Option<PathBuf>,
     pub manifest: Manifest,
+    pub discovered: PackageContents,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PackageContents {
+    pub skills: Vec<SkillEntry>,
+    pub agents: Vec<FileEntry>,
+    pub rules: Vec<FileEntry>,
+    pub commands: Vec<FileEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillEntry {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageRole {
+    Root,
+    Dependency,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,148 +111,166 @@ pub fn scaffold_init_in_dir(root: &Path) -> Result<()> {
 
     fs::create_dir_all(&skill_dir)
         .with_context(|| format!("failed to create {}", skill_dir.display()))?;
-    crate::store::write_atomic(&manifest_path, default_manifest_contents(&root).as_bytes())?;
+    crate::store::write_atomic(&manifest_path, default_manifest_contents().as_bytes())?;
     crate::store::write_atomic(&skill_file, default_skill_contents().as_bytes())?;
 
     Ok(())
 }
 
-pub fn load_from_dir(root: &Path) -> Result<LoadedManifest> {
+pub fn load_root_from_dir(root: &Path) -> Result<LoadedManifest> {
+    load_from_dir(root, PackageRole::Root)
+}
+
+pub fn load_dependency_from_dir(root: &Path) -> Result<LoadedManifest> {
+    load_from_dir(root, PackageRole::Dependency)
+}
+
+pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
     let root = canonicalize_existing_path(root)
         .with_context(|| format!("failed to access project root {}", root.display()))?;
     let manifest_path = root.join(MANIFEST_FILE);
-    let contents = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("failed to read manifest {}", manifest_path.display()))?;
-    load_from_str(&root, &manifest_path, &contents)
-}
-
-fn load_from_str(root: &Path, manifest_path: &Path, contents: &str) -> Result<LoadedManifest> {
-    let raw_value: toml::Value = toml::from_str(contents)
-        .with_context(|| format!("failed to parse TOML in {}", manifest_path.display()))?;
-    let raw_table = raw_value
-        .as_table()
-        .cloned()
-        .ok_or_else(|| anyhow!("manifest root must be a TOML table"))?;
-    let manifest: Manifest = raw_value.try_into()?;
-    let warnings = collect_ignored_field_warnings(&raw_table);
+    let (manifest, warnings, manifest_path) = if manifest_path.exists() {
+        let contents = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read manifest {}", manifest_path.display()))?;
+        let (manifest, warnings) = load_manifest_str(&manifest_path, &contents)?;
+        (manifest, warnings, Some(manifest_path))
+    } else {
+        (Manifest::default(), Vec::new(), None)
+    };
 
     let loaded = LoadedManifest {
-        root: root.to_path_buf(),
-        manifest_path: manifest_path.to_path_buf(),
+        root: root.clone(),
+        manifest_path,
         manifest,
+        discovered: discover_package_contents(&root)?,
         warnings,
     };
-    loaded.validate()?;
+    loaded.validate(role)?;
     Ok(loaded)
 }
 
+pub fn write_manifest(path: &Path, manifest: &Manifest) -> Result<()> {
+    let contents = serialize_manifest(manifest)?;
+    crate::store::write_atomic(path, contents.as_bytes())
+        .with_context(|| format!("failed to write manifest {}", path.display()))
+}
+
+pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
+    let mut output = String::new();
+
+    if let Some(api_version) = &manifest.api_version {
+        output.push_str(&format!("api_version = {}\n", quote(api_version)));
+    }
+    if let Some(name) = &manifest.name {
+        output.push_str(&format!("name = {}\n", quote(name)));
+    }
+    if let Some(version) = &manifest.version {
+        output.push_str(&format!("version = {}\n", quote(&version.to_string())));
+    }
+
+    if !manifest.capabilities.is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        for capability in &manifest.capabilities {
+            output.push_str("[[capabilities]]\n");
+            output.push_str(&format!("id = {}\n", quote(&capability.id)));
+            output.push_str(&format!(
+                "sensitivity = {}\n",
+                quote(&capability.sensitivity)
+            ));
+            if let Some(justification) = &capability.justification {
+                output.push_str(&format!("justification = {}\n", quote(justification)));
+            }
+            output.push('\n');
+        }
+    }
+
+    if !manifest.dependencies.is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str("[dependencies]\n");
+        for (alias, dependency) in &manifest.dependencies {
+            let mut fields = Vec::new();
+            if let Some(url) = &dependency.url {
+                fields.push(format!("url = {}", quote(url)));
+            }
+            if let Some(path) = &dependency.path {
+                fields.push(format!(
+                    "path = {}",
+                    quote(&path.to_string_lossy().replace('\\', "/"))
+                ));
+            }
+            if let Some(tag) = &dependency.tag {
+                fields.push(format!("tag = {}", quote(tag)));
+            }
+            output.push_str(&format!("{alias} = {{ {} }}\n", fields.join(", ")));
+        }
+    }
+
+    Ok(output)
+}
+
 impl LoadedManifest {
-    pub fn validate(&self) -> Result<()> {
-        if self.manifest.api_version.trim().is_empty() {
-            bail!("manifest field `api_version` must not be empty");
-        }
-        if self.manifest.name.trim().is_empty() {
-            bail!("manifest field `name` must not be empty");
-        }
-
-        self.validate_export_ids(
-            "skills",
-            self.manifest.exports.skills.iter().map(|item| &item.id),
-        )?;
-        self.validate_export_ids(
-            "agents",
-            self.manifest.exports.agents.iter().map(|item| &item.id),
-        )?;
-        self.validate_export_ids(
-            "rules",
-            self.manifest.exports.rules.iter().map(|item| &item.id),
-        )?;
-
-        for skill in &self.manifest.exports.skills {
-            let skill_dir = self.resolve_existing_path(&skill.path)?;
-            if !skill_dir.is_dir() {
-                bail!(
-                    "skill export `{}` must point to a directory, found {}",
-                    skill.id,
-                    skill_dir.display()
-                );
-            }
-            validate_skill_directory(&skill_dir)
-                .with_context(|| format!("skill export `{}` is invalid", skill.id))?;
-        }
-
-        for agent in &self.manifest.exports.agents {
-            let agent_path = self.resolve_existing_path(&agent.path)?;
-            if !agent_path.is_file() {
-                bail!(
-                    "agent export `{}` must point to a file, found {}",
-                    agent.id,
-                    agent_path.display()
-                );
+    pub fn validate(&self, role: PackageRole) -> Result<()> {
+        if let Some(api_version) = &self.manifest.api_version {
+            if api_version.trim().is_empty() {
+                bail!("manifest field `api_version` must not be empty");
             }
         }
-
-        for rule in &self.manifest.exports.rules {
-            if rule.sources.is_empty() {
-                bail!("rule export `{}` must declare at least one source", rule.id);
-            }
-            for source in &rule.sources {
-                if source.kind.trim().is_empty() {
-                    bail!("rule export `{}` has an empty source type", rule.id);
-                }
-                let source_path = self.resolve_existing_path(&source.path)?;
-                if !source_path.is_file() {
-                    bail!(
-                        "rule export `{}` source `{}` must point to a file",
-                        rule.id,
-                        source.kind
-                    );
-                }
-            }
-        }
-
-        for (name, dependency) in &self.manifest.dependencies.agentpacks {
+        if let Some(name) = &self.manifest.name {
             if name.trim().is_empty() {
+                bail!("manifest field `name` must not be empty");
+            }
+        }
+
+        let allow_empty_package = role == PackageRole::Root;
+        if self.discovered.is_empty() && !allow_empty_package {
+            bail!(
+                "package at {} must contain at least one of `agents/`, `commands/`, `rules/`, or `skills/`",
+                self.root.display()
+            );
+        }
+
+        for (alias, dependency) in &self.manifest.dependencies {
+            if alias.trim().is_empty() {
                 bail!("dependency names must not be empty");
             }
-            let dependency_root = self.resolve_existing_path(&dependency.path)?;
-            if !dependency_root.is_dir() {
-                bail!(
-                    "dependency `{}` path must point to a directory, found {}",
-                    name,
-                    dependency_root.display()
-                );
+            match dependency.source_kind()? {
+                DependencySourceKind::Git => {
+                    let url = dependency.url.as_deref().unwrap_or_default();
+                    if url.trim().is_empty() {
+                        bail!("dependency `{alias}` has an empty `url`");
+                    }
+                    let tag = dependency.tag.as_deref().unwrap_or_default();
+                    if tag.trim().is_empty() {
+                        bail!("dependency `{alias}` must declare `tag` for git sources");
+                    }
+                }
+                DependencySourceKind::Path => {
+                    let Some(path) = &dependency.path else {
+                        bail!("dependency `{alias}` must declare `path`");
+                    };
+                    let dependency_root = self.resolve_existing_path(path)?;
+                    if !dependency_root.is_dir() {
+                        bail!(
+                            "dependency `{alias}` path must point to a directory, found {}",
+                            dependency_root.display()
+                        );
+                    }
+                }
             }
         }
 
         Ok(())
     }
 
-    pub fn export_files(&self) -> Result<Vec<PathBuf>> {
-        let mut files = Vec::new();
-
-        for skill in &self.manifest.exports.skills {
-            files.extend(collect_files(&self.resolve_existing_path(&skill.path)?)?);
-        }
-
-        for agent in &self.manifest.exports.agents {
-            files.push(self.resolve_existing_path(&agent.path)?);
-        }
-
-        for rule in &self.manifest.exports.rules {
-            for source in &rule.sources {
-                files.push(self.resolve_existing_path(&source.path)?);
-            }
-        }
-
-        files.sort();
-        files.dedup();
-        Ok(files)
-    }
-
     pub fn package_files(&self) -> Result<Vec<PathBuf>> {
-        let mut files = self.export_files()?;
-        files.push(self.manifest_path.clone());
+        let mut files = self.discovered.files(self)?;
+        if let Some(manifest_path) = &self.manifest_path {
+            files.push(manifest_path.clone());
+        }
         files.sort();
         files.dedup();
         Ok(files)
@@ -266,21 +280,15 @@ impl LoadedManifest {
         self.resolve_existing_path(value)
     }
 
-    fn validate_export_ids<'a>(
-        &self,
-        kind: &str,
-        ids: impl Iterator<Item = &'a String>,
-    ) -> Result<()> {
-        let mut seen = HashSet::new();
-        for id in ids {
-            if id.trim().is_empty() {
-                bail!("{kind} export ids must not be empty");
-            }
-            if !seen.insert(id.clone()) {
-                bail!("duplicate {kind} export id `{id}`");
-            }
-        }
-        Ok(())
+    pub fn effective_name(&self) -> String {
+        self.manifest
+            .name
+            .clone()
+            .unwrap_or_else(|| default_package_name(&self.root))
+    }
+
+    pub fn effective_version(&self) -> Option<Version> {
+        self.manifest.version.clone()
     }
 
     fn resolve_existing_path(&self, value: &Path) -> Result<PathBuf> {
@@ -305,6 +313,151 @@ impl LoadedManifest {
 
         Ok(canonical)
     }
+}
+
+impl DependencySpec {
+    pub fn source_kind(&self) -> Result<DependencySourceKind> {
+        match (self.url.is_some(), self.path.is_some()) {
+            (true, false) => Ok(DependencySourceKind::Git),
+            (false, true) => Ok(DependencySourceKind::Path),
+            (true, true) => bail!("dependency source must not declare both `url` and `path`"),
+            (false, false) => bail!("dependency source must declare either `url` or `path`"),
+        }
+    }
+}
+
+impl PackageContents {
+    pub fn is_empty(&self) -> bool {
+        self.skills.is_empty()
+            && self.agents.is_empty()
+            && self.rules.is_empty()
+            && self.commands.is_empty()
+    }
+
+    pub fn files(&self, package: &LoadedManifest) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        for skill in &self.skills {
+            files.extend(collect_files(&package.resolve_existing_path(&skill.path)?)?);
+        }
+        for agent in &self.agents {
+            files.push(package.resolve_existing_path(&agent.path)?);
+        }
+        for rule in &self.rules {
+            files.push(package.resolve_existing_path(&rule.path)?);
+        }
+        for command in &self.commands {
+            files.push(package.resolve_existing_path(&command.path)?);
+        }
+        files.sort();
+        files.dedup();
+        Ok(files)
+    }
+}
+
+fn load_manifest_str(path: &Path, contents: &str) -> Result<(Manifest, Vec<String>)> {
+    let raw_value: toml::Value = toml::from_str(contents)
+        .with_context(|| format!("failed to parse TOML in {}", path.display()))?;
+    let raw_table = raw_value
+        .as_table()
+        .cloned()
+        .ok_or_else(|| anyhow!("manifest root must be a TOML table"))?;
+    let manifest: Manifest = raw_value.try_into()?;
+    Ok((manifest, collect_ignored_field_warnings(&raw_table)))
+}
+
+fn discover_package_contents(root: &Path) -> Result<PackageContents> {
+    let mut contents = PackageContents::default();
+    contents.skills = discover_skills(root)?;
+    contents.agents = discover_files(root, "agents", true)?;
+    contents.rules = discover_files(root, "rules", false)?;
+    contents.commands = discover_files(root, "commands", false)?;
+    Ok(contents)
+}
+
+fn discover_skills(root: &Path) -> Result<Vec<SkillEntry>> {
+    let skills_root = root.join("skills");
+    if !skills_root.exists() {
+        return Ok(Vec::new());
+    }
+    if !skills_root.is_dir() {
+        bail!("`skills/` must be a directory");
+    }
+
+    let mut skills = Vec::new();
+    let mut ids = HashSet::new();
+    for entry in fs::read_dir(&skills_root)
+        .with_context(|| format!("failed to read {}", skills_root.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_dir() {
+            bail!("`skills/` entries must be directories");
+        }
+
+        let id = entry.file_name().to_string_lossy().to_string();
+        if !ids.insert(id.clone()) {
+            bail!("duplicate skill id `{id}`");
+        }
+        let relative = PathBuf::from("skills").join(&id);
+        let skill_dir = canonicalize_existing_path(&root.join(&relative))?;
+        if !skill_dir.starts_with(root) {
+            bail!("skill `{id}` escapes the package root");
+        }
+        validate_skill_directory(&skill_dir).with_context(|| format!("skill `{id}` is invalid"))?;
+        skills.push(SkillEntry { id, path: relative });
+    }
+
+    skills.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(skills)
+}
+
+fn discover_files(root: &Path, directory: &str, markdown_only: bool) -> Result<Vec<FileEntry>> {
+    let dir_root = root.join(directory);
+    if !dir_root.exists() {
+        return Ok(Vec::new());
+    }
+    if !dir_root.is_dir() {
+        bail!("`{directory}/` must be a directory");
+    }
+
+    let mut items = Vec::new();
+    let mut ids = HashSet::new();
+    for entry in
+        fs::read_dir(&dir_root).with_context(|| format!("failed to read {}", dir_root.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() {
+            bail!("`{directory}/` entries must be files");
+        }
+
+        let path = entry.path();
+        if markdown_only && path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            bail!("`{directory}/` entries must use the `.md` extension");
+        }
+
+        let id = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| anyhow!("failed to derive id from {}", path.display()))?
+            .to_string();
+        if !ids.insert(id.clone()) {
+            bail!("duplicate {directory} id `{id}`");
+        }
+
+        let relative = PathBuf::from(directory).join(
+            path.file_name()
+                .ok_or_else(|| anyhow!("missing file name for {}", path.display()))?,
+        );
+        let canonical = canonicalize_existing_path(&root.join(&relative))?;
+        if !canonical.starts_with(root) {
+            bail!("`{directory}` item `{id}` escapes the package root");
+        }
+        items.push(FileEntry { id, path: relative });
+    }
+
+    items.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(items)
 }
 
 fn validate_skill_directory(skill_dir: &Path) -> Result<()> {
@@ -345,7 +498,6 @@ fn collect_ignored_field_warnings(table: &Table) -> Vec<String> {
         "api_version",
         "name",
         "version",
-        "exports",
         "capabilities",
         "dependencies",
     ];
@@ -362,7 +514,7 @@ fn collect_ignored_field_warnings(table: &Table) -> Vec<String> {
 
 fn collect_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(root) {
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
         let entry = entry?;
         if entry.file_type().is_file() {
             files.push(canonicalize_existing_path(entry.path())?);
@@ -377,18 +529,12 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
         .with_context(|| format!("failed to canonicalize {}", path.display()))
 }
 
-fn default_manifest_contents(root: &Path) -> String {
-    format!(
-        r#"api_version = "agentpack/v0"
-name = "{}"
-version = "0.1.0"
+fn default_manifest_contents() -> &'static str {
+    ""
+}
 
-[[exports.skills]]
-id = "example"
-path = "skills/example"
-"#,
-        default_package_name(root)
-    )
+fn quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn default_skill_contents() -> &'static str {
@@ -428,38 +574,6 @@ mod tests {
         file.write_all(contents.as_bytes()).unwrap();
     }
 
-    fn sample_manifest() -> &'static str {
-        r#"
-api_version = "agentpack/v0"
-name = "example"
-version = "0.1.0"
-compatibility = { ignored = true }
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-
-[[exports.agents]]
-id = "security-reviewer"
-path = "agents/security-reviewer.md"
-
-[[exports.rules]]
-id = "safe-shell"
-
-[[exports.rules.sources]]
-type = "codex.ruleset"
-path = "rules/default.rules"
-
-[[capabilities]]
-id = "shell.exec"
-sensitivity = "high"
-
-[dependencies.agentpacks.shared]
-path = "vendor/shared"
-requirement = "^1.0.0"
-"#
-    }
-
     fn write_valid_skill(root: &Path) {
         write_file(
             &root.join("skills/review/SKILL.md"),
@@ -467,84 +581,122 @@ requirement = "^1.0.0"
         );
     }
 
-    fn write_supporting_files(root: &Path) {
-        write_valid_skill(root);
-        write_file(
-            &root.join("agents/security-reviewer.md"),
-            "# Security Reviewer\n",
-        );
-        write_file(&root.join("rules/default.rules"), "allow = []\n");
-        fs::create_dir_all(root.join("vendor/shared")).unwrap();
-    }
-
     #[test]
-    fn loads_valid_manifest_and_surfaces_ignored_fields() {
+    fn loads_root_manifest_without_required_metadata() {
         let temp = TempDir::new().unwrap();
-        write_supporting_files(temp.path());
-
-        let manifest_path = temp.path().join(MANIFEST_FILE);
-        write_file(&manifest_path, sample_manifest());
-
-        let loaded = load_from_dir(temp.path()).unwrap();
-
-        assert_eq!(loaded.manifest.name, "example");
-        assert_eq!(loaded.manifest.version, Version::new(0, 1, 0));
-        assert_eq!(
-            loaded.warnings,
-            vec!["ignoring unsupported manifest field `compatibility`"]
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies]
+playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios", tag = "v0.1.0" }
+"#,
         );
+
+        let loaded = load_root_from_dir(temp.path()).unwrap();
+
+        assert!(loaded.manifest.api_version.is_none());
+        assert!(loaded.manifest.name.is_none());
+        assert!(loaded.manifest.version.is_none());
+        assert_eq!(loaded.discovered.skills[0].id, "review");
     }
 
     #[test]
-    fn rejects_skill_without_frontmatter_description() {
+    fn accepts_root_project_with_only_dependencies() {
+        let temp = TempDir::new().unwrap();
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies]
+playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios", tag = "v0.1.0" }
+"#,
+        );
+
+        let loaded = load_root_from_dir(temp.path()).unwrap();
+        assert!(loaded.discovered.is_empty());
+        assert_eq!(loaded.manifest.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn rejects_dependency_repo_without_supported_directories() {
+        let temp = TempDir::new().unwrap();
+        let error = load_dependency_from_dir(temp.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must contain at least one of"));
+    }
+
+    #[test]
+    fn rejects_invalid_git_dependency_without_tag() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies]
+playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios" }
+"#,
+        );
+
+        let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("must declare `tag`"));
+    }
+
+    #[test]
+    fn rejects_invalid_skill_frontmatter() {
         let temp = TempDir::new().unwrap();
         write_file(
             &temp.path().join("skills/review/SKILL.md"),
             "---\nname: Review\n---\n# Review\n",
         );
-        write_file(
-            &temp.path().join("agents/security-reviewer.md"),
-            "# Security Reviewer\n",
-        );
-        write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
-        fs::create_dir_all(temp.path().join("vendor/shared")).unwrap();
-        write_file(&temp.path().join(MANIFEST_FILE), sample_manifest());
 
-        let error = load_from_dir(temp.path()).unwrap_err().to_string();
-
-        assert!(error.contains("skill export `review` is invalid"));
+        let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("skill `review` is invalid"));
     }
 
     #[test]
-    fn rejects_paths_that_escape_the_root() {
+    fn discovers_agents_rules_and_commands() {
         let temp = TempDir::new().unwrap();
-        write_supporting_files(temp.path());
+        write_valid_skill(temp.path());
+        write_file(&temp.path().join("agents/security.md"), "# Security\n");
+        write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
+        write_file(&temp.path().join("commands/build.txt"), "cargo test\n");
 
-        let manifest = r#"
-api_version = "agentpack/v0"
-name = "example"
-version = "0.1.0"
+        let loaded = load_root_from_dir(temp.path()).unwrap();
 
-[[exports.skills]]
-id = "review"
-path = "../outside"
-"#;
-        write_file(&temp.path().join(MANIFEST_FILE), manifest);
-
-        let error = load_from_dir(temp.path()).unwrap_err().to_string();
-        assert!(error.contains("escapes the package root") || error.contains("missing path"));
+        assert_eq!(loaded.discovered.skills[0].id, "review");
+        assert_eq!(loaded.discovered.agents[0].id, "security");
+        assert_eq!(loaded.discovered.rules[0].id, "default");
+        assert_eq!(loaded.discovered.commands[0].id, "build");
     }
 
     #[test]
-    fn init_scaffolds_a_manifest_and_example_skill() {
+    fn init_scaffolds_a_minimal_manifest_and_example_skill() {
         let temp = TempDir::new().unwrap();
 
         scaffold_init_in_dir(temp.path()).unwrap();
 
         assert!(temp.path().join(MANIFEST_FILE).exists());
         assert!(temp.path().join("skills/example/SKILL.md").exists());
+        let loaded = load_root_from_dir(temp.path()).unwrap();
+        assert_eq!(loaded.discovered.skills[0].id, "example");
+    }
 
-        let loaded = load_from_dir(temp.path()).unwrap();
-        assert_eq!(loaded.manifest.exports.skills[0].id, "example");
+    #[test]
+    fn serializes_dependencies_as_inline_tables() {
+        let mut manifest = Manifest::default();
+        manifest.dependencies.insert(
+            "playbook_ios".into(),
+            DependencySpec {
+                url: Some("https://github.com/wenext-limited/playbook-ios".into()),
+                path: None,
+                tag: Some("v0.1.0".into()),
+            },
+        );
+
+        let encoded = serialize_manifest(&manifest).unwrap();
+
+        assert!(encoded.contains("[dependencies]"));
+        assert!(encoded.contains("playbook_ios = {"));
     }
 }

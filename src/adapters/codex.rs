@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::adapters::ManagedFile;
 use crate::resolver::ResolvedPackage;
@@ -13,7 +13,7 @@ pub fn managed_files(
 ) -> Result<Vec<ManagedFile>> {
     let mut files = Vec::new();
 
-    for skill in &package.manifest.manifest.exports.skills {
+    for skill in &package.manifest.discovered.skills {
         let source_root = snapshot_root.join(&skill.path);
         for entry in walkdir::WalkDir::new(&source_root) {
             let entry = entry?;
@@ -34,23 +34,8 @@ pub fn managed_files(
         }
     }
 
-    for rule in &package.manifest.manifest.exports.rules {
-        let mut codex_sources = rule
-            .sources
-            .iter()
-            .filter(|source| source.kind == "codex.ruleset");
-        let Some(source) = codex_sources.next() else {
-            continue;
-        };
-        if codex_sources.next().is_some() {
-            bail!(
-                "rule export `{}` in package `{}` has multiple codex.ruleset sources",
-                rule.id,
-                package.manifest.manifest.name
-            );
-        }
-
-        let source_path = snapshot_root.join(&source.path);
+    for rule in &package.manifest.discovered.rules {
+        let source_path = snapshot_root.join(&rule.path);
         files.push(ManagedFile {
             path: project_root
                 .join(".codex/rules")
