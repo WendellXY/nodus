@@ -32,18 +32,20 @@ Nodus 面向这样一类仓库：希望消费 agent package，但不想手动拼
 ```bash
 nodus add obra/superpowers --adapter codex
 nodus add obra/superpowers --adapter codex --component skills
+nodus info obra/superpowers
 nodus doctor
 ```
 
 这套安装流程的设计目标是保持可预测：
 
 - `nodus add` 会记录依赖，并立即执行同步
+- `nodus info` 会打印依赖别名、本地包路径或 Git 引用解析后的元数据
 - `nodus.lock` 会保存精确的 Git 修订版本和受管理输出
 - 过期的受管理文件会被清理
 - 非受管理文件永远不会被覆盖
 - 高敏感度包必须显式选择允许
 
-包作者仍然可以从 `skills/`、`agents/`、`rules/` 和 `commands/` 发布内容，但作为使用方，你主要会和 `nodus add`、`nodus sync`、`nodus doctor` 打交道。
+包作者仍然可以从 `skills/`、`agents/`、`rules/` 和 `commands/` 发布内容，但作为使用方，你主要会和 `nodus add`、`nodus info`、`nodus sync`、`nodus doctor` 打交道。
 
 <a id="install"></a>
 ## 安装
@@ -364,6 +366,33 @@ nodus add obra/superpowers
 ### `nodus init`
 
 创建最小化的 `nodus.toml`，并生成 `skills/example/SKILL.md`。
+
+### `nodus info`
+
+```bash
+nodus info <package>
+```
+
+显示解析后的包元数据，不会修改当前项目。
+
+示例：
+
+```bash
+nodus info obra/superpowers
+nodus info ./vendor/superpowers
+nodus info superpowers
+nodus info obra/superpowers --tag v0.4.0
+nodus info obra/superpowers --branch main
+```
+
+行为：
+
+- 接受当前仓库中的依赖别名、本地包目录、完整 Git URL，或 `owner/repo` 这样的 GitHub 简写
+- 如果参数匹配当前仓库中的直接依赖别名，则使用 `nodus.toml` 里固定的来源进行解析
+- 当没有提供 Git ref 覆盖时，会直接检查本地包目录
+- 当检查 Git 引用且未提供 `--tag` 或 `--branch` 时，会解析最新 Git tag
+- 如果 Git 仓库没有 tag，则回退到默认分支
+- 输出解析后的来源、包根目录、选中的组件、发现到的 artifact id、依赖、适配器以及声明的 capability
 
 ### `nodus remove`
 

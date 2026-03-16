@@ -32,18 +32,20 @@ Point it at a GitHub repo or local path and Nodus will resolve the package, pin 
 ```bash
 nodus add obra/superpowers --adapter codex
 nodus add obra/superpowers --adapter codex --component skills
+nodus info obra/superpowers
 nodus doctor
 ```
 
 The install flow is designed to stay predictable:
 
 - `nodus add` records the dependency and runs sync immediately
+- `nodus info` prints resolved metadata for a dependency alias, local package path, or Git reference
 - `nodus.lock` captures the exact Git revision and managed outputs
 - managed files are pruned when they go stale
 - unmanaged files are never overwritten
 - high-sensitivity packages require explicit opt-in
 
-Package authors can still publish content from `skills/`, `agents/`, `rules/`, and `commands/`, but as a consumer you mostly interact with `nodus add`, `nodus sync`, and `nodus doctor`.
+Package authors can still publish content from `skills/`, `agents/`, `rules/`, and `commands/`, but as a consumer you mostly interact with `nodus add`, `nodus info`, `nodus sync`, and `nodus doctor`.
 
 ## Install
 
@@ -361,6 +363,33 @@ nodus add obra/superpowers
 ### `nodus init`
 
 Creates a minimal `nodus.toml` plus `skills/example/SKILL.md`.
+
+### `nodus info`
+
+```bash
+nodus info <package>
+```
+
+Displays resolved package metadata without modifying the current project.
+
+Examples:
+
+```bash
+nodus info obra/superpowers
+nodus info ./vendor/superpowers
+nodus info superpowers
+nodus info obra/superpowers --tag v0.4.0
+nodus info obra/superpowers --branch main
+```
+
+Behavior:
+
+- accepts a dependency alias from the current repo, a local package directory, a full Git URL, or a GitHub shortcut like `owner/repo`
+- resolves a direct dependency alias using the source pinned in the current repo's `nodus.toml`
+- inspects local package directories directly when no Git ref override is provided
+- resolves the latest Git tag when inspecting a Git reference without `--tag` or `--branch`
+- falls back to the default branch when a Git repository has no tags
+- prints the resolved source, package root, selected components, discovered artifact ids, dependencies, adapters, and declared capabilities
 
 ### `nodus remove`
 

@@ -83,6 +83,10 @@ impl Reporter {
         ))
     }
 
+    pub fn line(&self, message: impl std::fmt::Display) -> anyhow::Result<()> {
+        self.write_line(&message.to_string())
+    }
+
     pub fn error(&self, error: &Error) -> anyhow::Result<()> {
         let mut chain = error.chain();
         if let Some(head) = chain.next() {
@@ -199,6 +203,16 @@ mod tests {
             buffer.contents(),
             "note: using shared checkout\n    Finished 1 package in 0.01s\n"
         );
+    }
+
+    #[test]
+    fn renders_plain_lines_without_prefixes() {
+        let buffer = SharedBuffer::default();
+        let reporter = Reporter::sink(ColorMode::Never, buffer.clone());
+
+        reporter.line("hello world").unwrap();
+
+        assert_eq!(buffer.contents(), "hello world\n");
     }
 
     #[test]

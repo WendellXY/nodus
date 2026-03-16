@@ -57,6 +57,17 @@ enum Command {
         #[arg(help = "Dependency alias or repository reference to remove")]
         package: String,
     },
+    #[command(about = "Display resolved package metadata")]
+    Info {
+        #[arg(
+            help = "Dependency alias, local package path, Git URL, or GitHub shortcut like owner/repo"
+        )]
+        package: String,
+        #[arg(long, conflicts_with = "branch", help = "Inspect a specific Git tag")]
+        tag: Option<String>,
+        #[arg(long, conflicts_with = "tag", help = "Inspect a specific Git branch")]
+        branch: Option<String>,
+    },
     #[command(about = "Create a minimal nodus.toml and example skill")]
     Init,
     #[command(about = "Resolve dependencies and write managed runtime outputs")]
@@ -141,6 +152,18 @@ fn run_command_in_dir(
             ))?;
             Ok(())
         }
+        Command::Info {
+            package,
+            tag,
+            branch,
+        } => crate::info::describe_package_in_dir(
+            cwd,
+            cache_root,
+            &package,
+            tag.as_deref(),
+            branch.as_deref(),
+            reporter,
+        ),
         Command::Init => {
             let summary = crate::manifest::scaffold_init_in_dir(cwd, reporter)?;
             reporter.finish(format!(
@@ -320,6 +343,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_info_subcommand() {
+        let cli =
+            Cli::try_parse_from(["nodus", "info", "obra/superpowers", "--branch", "main"]).unwrap();
+
+        match cli.command {
+            Command::Info {
+                package,
+                tag,
+                branch,
+            } => {
+                assert_eq!(package, "obra/superpowers");
+                assert_eq!(tag, None);
+                assert_eq!(branch.as_deref(), Some("main"));
+            }
+            other => panic!("expected info command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn root_help_describes_commands() {
         let help = <Cli as clap::CommandFactory>::command()
             .render_long_help()
@@ -327,6 +369,7 @@ mod tests {
 
         assert!(help.contains("Nodus resolves agent packages from local paths and Git tags"));
         assert!(help.contains("Add a dependency and run sync"));
+        assert!(help.contains("Display resolved package metadata"));
         assert!(help.contains("Validate lockfile, shared store, and managed output consistency"));
     }
 
@@ -407,6 +450,37 @@ mod tests {
         assert!(output.contains("nodus.toml"));
         assert!(output.contains("skills/example/SKILL.md"));
         assert!(output.contains("Finished"));
+    }
+
+    #[test]
+    fn info_command_emits_package_metadata_lines() {
+        let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        write_file(
+            &temp.path().join("nodus.toml"),
+            r#"
+name = "playbook-ios"
+version = "0.1.0"
+"#,
+        );
+        write_skill(&temp.path().join("skills/review"), "Review");
+
+        let output = run_command_output(
+            Command::Info {
+                package: ".".into(),
+                tag: None,
+                branch: None,
+            },
+            temp.path(),
+            cache.path(),
+        );
+
+        assert!(output.contains("playbook-ios"));
+        assert!(output.contains("version: 0.1.0"));
+        assert!(output.contains("alias: playbook_ios"));
+        assert!(output.contains("artifacts:"));
+        assert!(output.contains("skills = [review]"));
+        assert!(!output.contains("Finished"));
     }
 
     #[test]
