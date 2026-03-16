@@ -38,6 +38,7 @@ pub fn add_dependency_in_dir(
     let normalized_url = normalize_git_url(url);
     let alias = normalize_alias_from_url(&normalized_url)?;
     let checkout = ensure_git_dependency(cache_root, &normalized_url, tag, true)?;
+    let github = github_slug_from_url(&checkout.url);
     load_dependency_from_dir(&checkout.path)
         .with_context(|| format!("dependency `{alias}` does not match the Nodus package layout"))?;
 
@@ -51,7 +52,8 @@ pub fn add_dependency_in_dir(
     root.manifest.dependencies.insert(
         alias,
         DependencySpec {
-            url: Some(checkout.url.clone()),
+            github: github.clone(),
+            url: github.is_none().then_some(checkout.url.clone()),
             path: None,
             tag: Some(checkout.tag.clone()),
         },
@@ -169,6 +171,19 @@ pub fn normalize_git_url(url: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+pub fn github_slug_from_url(url: &str) -> Option<String> {
+    let normalized = normalize_git_url(url);
+    let trimmed = normalized
+        .strip_prefix("https://github.com/")?
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
+    let (owner, repo) = trimmed.split_once('/')?;
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
 }
 
 pub fn normalize_alias_from_url(url: &str) -> Result<String> {
@@ -488,11 +503,28 @@ mod tests {
     }
 
     #[test]
+    fn extracts_github_slugs_from_https_urls() {
+        assert_eq!(
+            github_slug_from_url("https://github.com/wenext-limited/playbook-ios"),
+            Some("wenext-limited/playbook-ios".into())
+        );
+        assert_eq!(
+            github_slug_from_url("wenext-limited/playbook-ios"),
+            Some("wenext-limited/playbook-ios".into())
+        );
+        assert_eq!(
+            github_slug_from_url("git@github.com:wenext-limited/playbook-ios.git"),
+            None
+        );
+    }
+
+    #[test]
     fn resolves_dependency_alias_from_exact_name() {
         let mut dependencies = std::collections::BTreeMap::new();
         dependencies.insert(
             "playbook_ios".into(),
             DependencySpec {
+                github: None,
                 url: Some("https://github.com/wenext-limited/playbook-ios".into()),
                 path: None,
                 tag: Some("v0.1.0".into()),
@@ -511,6 +543,7 @@ mod tests {
         dependencies.insert(
             "playbook_ios".into(),
             DependencySpec {
+                github: None,
                 url: Some("https://github.com/wenext-limited/playbook-ios".into()),
                 path: None,
                 tag: Some("v0.1.0".into()),

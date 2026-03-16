@@ -124,7 +124,7 @@ A minimal consumer manifest looks like:
 
 ```toml
 [dependencies]
-playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios", tag = "v0.1.0" }
+playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
 ```
 
 You can also use local path dependencies:
@@ -150,6 +150,7 @@ justification = "Run repository checks."
 - `version` (optional)
 - `capabilities`
 - `[dependencies]`
+- `dependencies.<alias>.github`
 - `dependencies.<alias>.url`
 - `dependencies.<alias>.path`
 - `dependencies.<alias>.tag`

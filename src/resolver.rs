@@ -324,11 +324,11 @@ fn resolve_dependency(
             )
         }
         DependencySourceKind::Git => {
-            let url = dependency.url.as_deref().unwrap_or_default();
+            let url = dependency.resolved_git_url()?;
             let tag = dependency.tag.as_deref().unwrap_or_default();
             let checkout = ensure_git_dependency(
                 context.cache_root,
-                url,
+                &url,
                 Some(tag),
                 context.mode == ResolveMode::Sync,
             )?;

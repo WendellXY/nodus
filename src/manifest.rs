@@ -35,6 +35,8 @@ pub struct Capability {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
@@ -193,6 +195,9 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
         output.push_str("[dependencies]\n");
         for (alias, dependency) in &manifest.dependencies {
             let mut fields = Vec::new();
+            if let Some(github) = &dependency.github {
+                fields.push(format!("github = {}", quote(github)));
+            }
             if let Some(url) = &dependency.url {
                 fields.push(format!("url = {}", quote(url)));
             }
@@ -239,9 +244,9 @@ impl LoadedManifest {
             }
             match dependency.source_kind()? {
                 DependencySourceKind::Git => {
-                    let url = dependency.url.as_deref().unwrap_or_default();
+                    let url = dependency.resolved_git_url()?;
                     if url.trim().is_empty() {
-                        bail!("dependency `{alias}` has an empty `url`");
+                        bail!("dependency `{alias}` has an empty git source");
                     }
                     let tag = dependency.tag.as_deref().unwrap_or_default();
                     if tag.trim().is_empty() {
@@ -317,12 +322,43 @@ impl LoadedManifest {
 
 impl DependencySpec {
     pub fn source_kind(&self) -> Result<DependencySourceKind> {
-        match (self.url.is_some(), self.path.is_some()) {
-            (true, false) => Ok(DependencySourceKind::Git),
-            (false, true) => Ok(DependencySourceKind::Path),
-            (true, true) => bail!("dependency source must not declare both `url` and `path`"),
-            (false, false) => bail!("dependency source must declare either `url` or `path`"),
+        let git_sources = usize::from(self.github.is_some()) + usize::from(self.url.is_some());
+        match (git_sources, self.path.is_some()) {
+            (1, false) => Ok(DependencySourceKind::Git),
+            (0, true) => Ok(DependencySourceKind::Path),
+            (0, false) => {
+                bail!("dependency source must declare either `github`, `url`, or `path`")
+            }
+            (_, true) => {
+                bail!(
+                    "dependency source must not declare both a git source (`github` or `url`) and `path`"
+                )
+            }
+            _ => bail!("dependency source must not declare both `github` and `url`"),
         }
+    }
+
+    pub fn resolved_git_url(&self) -> Result<String> {
+        if let Some(url) = &self.url {
+            let trimmed = url.trim();
+            if trimmed.is_empty() {
+                bail!("git dependency `url` must not be empty");
+            }
+            return Ok(trimmed.to_string());
+        }
+
+        if let Some(github) = &self.github {
+            let trimmed = github.trim().trim_matches('/');
+            let Some((owner, repo)) = trimmed.split_once('/') else {
+                bail!("git dependency `github` must use the format `owner/repo`");
+            };
+            if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+                bail!("git dependency `github` must use the format `owner/repo`");
+            }
+            return Ok(format!("https://github.com/{owner}/{repo}"));
+        }
+
+        bail!("dependency source must declare either `github` or `url` for git dependencies")
     }
 }
 
@@ -693,13 +729,23 @@ playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios", tag = "
             &temp.path().join(MANIFEST_FILE),
             r#"
 [dependencies]
-playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios", tag = "v0.1.0" }
+playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
 "#,
         );
 
         let loaded = load_root_from_dir(temp.path()).unwrap();
         assert!(loaded.discovered.is_empty());
         assert_eq!(loaded.manifest.dependencies.len(), 1);
+        assert_eq!(
+            loaded
+                .manifest
+                .dependencies
+                .get("playbook_ios")
+                .unwrap()
+                .resolved_git_url()
+                .unwrap(),
+            "https://github.com/wenext-limited/playbook-ios"
+        );
     }
 
     #[test]
@@ -725,6 +771,22 @@ playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios" }
 
         let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
         assert!(error.contains("must declare `tag`"));
+    }
+
+    #[test]
+    fn rejects_invalid_github_dependency_reference() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies]
+playbook_ios = { github = "wenext-limited", tag = "v0.1.0" }
+"#,
+        );
+
+        let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("must use the format `owner/repo`"));
     }
 
     #[test]
@@ -825,7 +887,8 @@ playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios" }
         manifest.dependencies.insert(
             "playbook_ios".into(),
             DependencySpec {
-                url: Some("https://github.com/wenext-limited/playbook-ios".into()),
+                github: Some("wenext-limited/playbook-ios".into()),
+                url: None,
                 path: None,
                 tag: Some("v0.1.0".into()),
             },
@@ -835,5 +898,20 @@ playbook_ios = { url = "https://github.com/wenext-limited/playbook-ios" }
 
         assert!(encoded.contains("[dependencies]"));
         assert!(encoded.contains("playbook_ios = {"));
+        assert!(encoded.contains("github = \"wenext-limited/playbook-ios\""));
+        assert!(!encoded.contains("url = "));
+    }
+
+    #[test]
+    fn rejects_dependencies_with_multiple_git_sources() {
+        let dependency = DependencySpec {
+            github: Some("wenext-limited/playbook-ios".into()),
+            url: Some("https://github.com/wenext-limited/playbook-ios".into()),
+            path: None,
+            tag: Some("v0.1.0".into()),
+        };
+
+        let error = dependency.source_kind().unwrap_err().to_string();
+        assert!(error.contains("must not declare both `github` and `url`"));
     }
 }
