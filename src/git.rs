@@ -10,6 +10,7 @@ use crate::manifest::{
     DependencySpec, MANIFEST_FILE, PackageRole, load_dependency_from_dir, load_from_dir,
     write_manifest,
 };
+use crate::report::Reporter;
 use crate::resolver::{sync_in_dir, sync_in_dir_with_adapters};
 use crate::selection::{resolve_adapter_selection, should_prompt_for_adapter};
 
@@ -21,19 +22,38 @@ pub struct GitCheckout {
     pub rev: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct AddSummary {
+    pub alias: String,
+    pub tag: String,
+    pub adapters: Vec<Adapter>,
+    pub managed_file_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoveSummary {
+    pub alias: String,
+    pub managed_file_count: usize,
+}
+
 pub fn add_dependency_with_adapters(
     cache_root: &Path,
     url: &str,
     tag: Option<&str>,
     adapters: &[Adapter],
-) -> Result<()> {
+    reporter: &Reporter,
+) -> Result<AddSummary> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    add_dependency_in_dir_with_adapters(&cwd, cache_root, url, tag, adapters)
+    add_dependency_in_dir_with_adapters(&cwd, cache_root, url, tag, adapters, reporter)
 }
 
-pub fn remove_dependency(cache_root: &Path, package: &str) -> Result<()> {
+pub fn remove_dependency(
+    cache_root: &Path,
+    package: &str,
+    reporter: &Reporter,
+) -> Result<RemoveSummary> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    remove_dependency_in_dir(&cwd, cache_root, package)
+    remove_dependency_in_dir(&cwd, cache_root, package, reporter)
 }
 
 pub fn add_dependency_in_dir_with_adapters(
@@ -42,10 +62,11 @@ pub fn add_dependency_in_dir_with_adapters(
     url: &str,
     tag: Option<&str>,
     adapters: &[Adapter],
-) -> Result<()> {
+    reporter: &Reporter,
+) -> Result<AddSummary> {
     let normalized_url = normalize_git_url(url);
     let alias = normalize_alias_from_url(&normalized_url)?;
-    let checkout = ensure_git_dependency(cache_root, &normalized_url, tag, true)?;
+    let checkout = ensure_git_dependency(cache_root, &normalized_url, tag, true, reporter)?;
     let github = github_slug_from_url(&checkout.url);
     load_dependency_from_dir(&checkout.path)
         .with_context(|| format!("dependency `{alias}` does not match the Nodus package layout"))?;
@@ -57,8 +78,16 @@ pub fn add_dependency_in_dir_with_adapters(
             project_root.display()
         );
     }
+    reporter.status(
+        "Adding",
+        format!(
+            "{alias} {} to {}",
+            checkout.tag,
+            project_root.join(MANIFEST_FILE).display()
+        ),
+    )?;
     root.manifest.dependencies.insert(
-        alias,
+        alias.clone(),
         DependencySpec {
             github: github.clone(),
             url: github.is_none().then_some(checkout.url.clone()),
@@ -76,21 +105,44 @@ pub fn add_dependency_in_dir_with_adapters(
         root.manifest.set_enabled_adapters(&selection.adapters);
     }
 
+    reporter.status("Writing", project_root.join(MANIFEST_FILE).display())?;
     write_manifest(&project_root.join(MANIFEST_FILE), &root.manifest)?;
-    sync_in_dir_with_adapters(project_root, cache_root, false, false, adapters)
+    let sync_summary =
+        sync_in_dir_with_adapters(project_root, cache_root, false, false, adapters, reporter)?;
+
+    Ok(AddSummary {
+        alias,
+        tag: checkout.tag,
+        adapters: sync_summary.adapters,
+        managed_file_count: sync_summary.managed_file_count,
+    })
 }
 
 pub fn remove_dependency_in_dir(
     project_root: &Path,
     cache_root: &Path,
     package: &str,
-) -> Result<()> {
+    reporter: &Reporter,
+) -> Result<RemoveSummary> {
     let mut root = load_from_dir(project_root, PackageRole::Root)?;
     let alias = resolve_dependency_alias(&root.manifest.dependencies, package)?;
+    reporter.status(
+        "Removing",
+        format!(
+            "{alias} from {}",
+            project_root.join(MANIFEST_FILE).display()
+        ),
+    )?;
     root.manifest.dependencies.remove(&alias);
 
+    reporter.status("Writing", project_root.join(MANIFEST_FILE).display())?;
     write_manifest(&project_root.join(MANIFEST_FILE), &root.manifest)?;
-    sync_in_dir(project_root, cache_root, false, false)
+    let sync_summary = sync_in_dir(project_root, cache_root, false, false, reporter)?;
+
+    Ok(RemoveSummary {
+        alias,
+        managed_file_count: sync_summary.managed_file_count,
+    })
 }
 
 pub fn ensure_git_dependency(
@@ -98,14 +150,18 @@ pub fn ensure_git_dependency(
     url: &str,
     tag: Option<&str>,
     allow_network: bool,
+    reporter: &Reporter,
 ) -> Result<GitCheckout> {
     let normalized_url = normalize_git_url(url);
     let mirror_path = shared_repository_path(cache_root, &normalized_url)?;
-    ensure_shared_repository(&mirror_path, &normalized_url, allow_network)?;
+    ensure_shared_repository(&mirror_path, &normalized_url, allow_network, reporter)?;
 
     let resolved_tag = match tag {
         Some(value) => value.to_string(),
-        None => latest_tag(&mirror_path)?,
+        None => {
+            reporter.status("Resolving", format!("latest tag for {normalized_url}"))?;
+            latest_tag(&mirror_path)?
+        }
     };
     let rev = resolve_tag_to_rev(&mirror_path, &resolved_tag)?;
     let checkout_path = shared_checkout_path(cache_root, &normalized_url, &rev)?;
@@ -116,6 +172,7 @@ pub fn ensure_git_dependency(
         &normalized_url,
         &rev,
         allow_network,
+        reporter,
     )?;
 
     Ok(GitCheckout {
@@ -278,6 +335,7 @@ fn ensure_shared_repository(
     mirror_path: &Path,
     normalized_url: &str,
     allow_network: bool,
+    reporter: &Reporter,
 ) -> Result<()> {
     if mirror_path.exists() {
         if !is_bare_repository(mirror_path)? {
@@ -298,6 +356,7 @@ fn ensure_shared_repository(
         }
 
         if allow_network {
+            reporter.status("Updating", format!("git cache for {normalized_url}"))?;
             git_run(mirror_path, ["fetch", "--tags", "--prune", "origin"])?;
         }
         return Ok(());
@@ -317,6 +376,7 @@ fn ensure_shared_repository(
         )
     })?;
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    reporter.status("Updating", format!("git cache for {normalized_url}"))?;
     git_run(
         parent,
         [
@@ -334,6 +394,7 @@ fn ensure_shared_checkout(
     normalized_url: &str,
     rev: &str,
     allow_network: bool,
+    reporter: &Reporter,
 ) -> Result<()> {
     if checkout_path.exists() {
         validate_shared_checkout(checkout_path, mirror_path, normalized_url)?;
@@ -355,6 +416,14 @@ fn ensure_shared_checkout(
         )
     })?;
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    reporter.status(
+        "Updating",
+        format!(
+            "shared checkout {} for {}",
+            short_display_rev(rev),
+            normalized_url
+        ),
+    )?;
     git_run(
         mirror_path,
         [
@@ -372,6 +441,10 @@ fn ensure_shared_checkout(
             mirror_path.display(),
         )
     })
+}
+
+fn short_display_rev(rev: &str) -> String {
+    rev.chars().take(12).collect()
 }
 
 pub fn validate_shared_checkout(

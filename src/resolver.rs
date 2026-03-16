@@ -16,6 +16,7 @@ use crate::manifest::{
     DependencySourceKind, DependencySpec, LoadedManifest, PackageRole, load_dependency_from_dir,
     load_root_from_dir, write_manifest,
 };
+use crate::report::Reporter;
 use crate::selection::{resolve_adapter_selection, should_prompt_for_adapter};
 use crate::store::{snapshot_resolution, write_atomic};
 
@@ -33,6 +34,18 @@ pub struct ResolvedPackage {
     pub manifest: LoadedManifest,
     pub source: PackageSource,
     pub digest: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncSummary {
+    pub package_count: usize,
+    pub adapters: Vec<Adapter>,
+    pub managed_file_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct DoctorSummary {
+    pub package_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,10 +74,11 @@ struct ResolverState {
     resolved_by_path: HashMap<PathBuf, ResolvedPackage>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct ResolveContext<'a> {
     cache_root: &'a Path,
     mode: ResolveMode,
+    reporter: &'a Reporter,
 }
 
 pub fn sync_with_adapters(
@@ -72,9 +86,17 @@ pub fn sync_with_adapters(
     locked: bool,
     allow_high_sensitivity: bool,
     adapters: &[crate::adapters::Adapter],
-) -> Result<()> {
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
-    sync_in_dir_with_adapters(&cwd, cache_root, locked, allow_high_sensitivity, adapters)
+    sync_in_dir_with_adapters(
+        &cwd,
+        cache_root,
+        locked,
+        allow_high_sensitivity,
+        adapters,
+        reporter,
+    )
 }
 
 pub fn sync_in_dir(
@@ -82,8 +104,16 @@ pub fn sync_in_dir(
     cache_root: &Path,
     locked: bool,
     allow_high_sensitivity: bool,
-) -> Result<()> {
-    sync_in_dir_with_adapters(cwd, cache_root, locked, allow_high_sensitivity, &[])
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters(
+        cwd,
+        cache_root,
+        locked,
+        allow_high_sensitivity,
+        &[],
+        reporter,
+    )
 }
 
 pub fn sync_in_dir_with_adapters(
@@ -92,7 +122,8 @@ pub fn sync_in_dir_with_adapters(
     locked: bool,
     allow_high_sensitivity: bool,
     adapters: &[Adapter],
-) -> Result<()> {
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
     let mut root = load_root_from_dir(cwd)?;
     let selection = resolve_adapter_selection(
         cwd,
@@ -107,11 +138,21 @@ pub fn sync_in_dir_with_adapters(
             );
         }
         root.manifest.set_enabled_adapters(&selection.adapters);
+        reporter.status(
+            "Writing",
+            cwd.join(crate::manifest::MANIFEST_FILE).display(),
+        )?;
         write_manifest(&cwd.join(crate::manifest::MANIFEST_FILE), &root.manifest)?;
     }
 
-    let resolution = resolve_project(cwd, cache_root, ResolveMode::Sync)?;
-    enforce_capabilities(&resolution, allow_high_sensitivity)?;
+    reporter.status("Resolving", format!("package graph in {}", cwd.display()))?;
+    let resolution = resolve_project(cwd, cache_root, ResolveMode::Sync, reporter)?;
+    reporter.status("Checking", "declared capabilities")?;
+    enforce_capabilities(&resolution, allow_high_sensitivity, reporter)?;
+    reporter.status(
+        "Snapshotting",
+        format!("{} packages", resolution.packages.len()),
+    )?;
     let stored_packages = snapshot_resolution(cache_root, &resolution)?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
     let existing_lockfile = if lockfile_path.exists() {
@@ -160,9 +201,11 @@ pub fn sync_in_dir_with_adapters(
 
     validate_collisions(planned_files, &owned_paths)?;
     prune_stale_files(&owned_paths, &desired_paths, cwd)?;
+    reporter.status("Writing", "managed runtime outputs")?;
     write_managed_files(planned_files)?;
 
     if !locked {
+        reporter.status("Writing", lockfile_path.display())?;
         lockfile.write(&lockfile_path)?;
     }
 
@@ -171,27 +214,36 @@ pub fn sync_in_dir_with_adapters(
         .iter()
         .chain(output_plan.warnings.iter())
     {
-        eprintln!("warning: {warning}");
+        reporter.warning(warning)?;
     }
 
-    Ok(())
+    Ok(SyncSummary {
+        package_count: resolution.packages.len(),
+        adapters: selection.adapters,
+        managed_file_count: planned_files.len(),
+    })
 }
 
-pub fn doctor(cache_root: &Path) -> Result<()> {
+pub fn doctor(cache_root: &Path, reporter: &Reporter) -> Result<DoctorSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
-    doctor_in_dir(&cwd, cache_root)
+    doctor_in_dir(&cwd, cache_root, reporter)
 }
 
 #[cfg(test)]
-pub fn resolve_project_for_sync(root: &Path, cache_root: &Path) -> Result<Resolution> {
-    resolve_project(root, cache_root, ResolveMode::Sync)
+pub fn resolve_project_for_sync(
+    root: &Path,
+    cache_root: &Path,
+    reporter: &Reporter,
+) -> Result<Resolution> {
+    resolve_project(root, cache_root, ResolveMode::Sync, reporter)
 }
 
-pub fn doctor_in_dir(cwd: &Path, cache_root: &Path) -> Result<()> {
+pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Result<DoctorSummary> {
     let root = load_root_from_dir(cwd)?;
     let selection = resolve_adapter_selection(cwd, &root.manifest, &[], false)?;
     let selected_adapters = Adapters::from_slice(&selection.adapters);
-    let resolution = resolve_project(cwd, cache_root, ResolveMode::Doctor)?;
+    reporter.status("Checking", "manifest, lockfile, cache, and managed outputs")?;
+    let resolution = resolve_project(cwd, cache_root, ResolveMode::Doctor, reporter)?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
     if !lockfile_path.exists() {
         bail!("missing {}", LOCKFILE_NAME);
@@ -246,17 +298,28 @@ pub fn doctor_in_dir(cwd: &Path, cache_root: &Path) -> Result<()> {
         .iter()
         .chain(output_plan.warnings.iter())
     {
-        eprintln!("warning: {warning}");
+        reporter.warning(warning)?;
     }
 
-    Ok(())
+    Ok(DoctorSummary {
+        package_count: resolution.packages.len(),
+    })
 }
 
-fn resolve_project(root: &Path, cache_root: &Path, mode: ResolveMode) -> Result<Resolution> {
+fn resolve_project(
+    root: &Path,
+    cache_root: &Path,
+    mode: ResolveMode,
+    reporter: &Reporter,
+) -> Result<Resolution> {
     let project_root = root
         .canonicalize()
         .with_context(|| format!("failed to access {}", root.display()))?;
-    let context = ResolveContext { cache_root, mode };
+    let context = ResolveContext {
+        cache_root,
+        mode,
+        reporter,
+    };
     let mut state = ResolverState::default();
     resolve_package(
         &context,
@@ -380,6 +443,7 @@ fn resolve_dependency(
                 &url,
                 Some(tag),
                 context.mode == ResolveMode::Sync,
+                context.reporter,
             )?;
             let source = PackageSource::Git {
                 url: checkout.url,
@@ -547,15 +611,22 @@ fn display_path(path: &Path) -> String {
     }
 }
 
-fn enforce_capabilities(resolution: &Resolution, allow_high_sensitivity: bool) -> Result<()> {
+fn enforce_capabilities(
+    resolution: &Resolution,
+    allow_high_sensitivity: bool,
+    reporter: &Reporter,
+) -> Result<()> {
     let mut high_sensitivity = Vec::new();
 
     for package in &resolution.packages {
         for capability in &package.manifest.manifest.capabilities {
-            eprintln!(
-                "capability: {} {} ({})",
+            reporter.note(format!(
+                "capability {} {} ({})",
                 package.alias, capability.id, capability.sensitivity
-            );
+            ))?;
+            if let Some(justification) = &capability.justification {
+                reporter.note(format!("justification: {justification}"))?;
+            }
             if capability.sensitivity.eq_ignore_ascii_case("high") {
                 high_sensitivity.push(format!("{}:{}", package.alias, capability.id));
             }
@@ -698,10 +769,13 @@ mod tests {
     use super::*;
     use crate::adapters::{Adapter, Adapters, namespaced_skill_id};
     use crate::git::{
-        add_dependency_in_dir_with_adapters, normalize_alias_from_url, remove_dependency_in_dir,
+        AddSummary, RemoveSummary,
+        add_dependency_in_dir_with_adapters as add_dependency_in_dir_with_adapters_impl,
+        normalize_alias_from_url, remove_dependency_in_dir as remove_dependency_in_dir_impl,
         shared_checkout_path, shared_repository_path,
     };
     use crate::manifest::{MANIFEST_FILE, load_root_from_dir};
+    use crate::report::Reporter;
 
     fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -779,6 +853,71 @@ mod tests {
 
     fn cache_dir() -> TempDir {
         TempDir::new().unwrap()
+    }
+
+    fn resolve_project(root: &Path, cache_root: &Path, mode: ResolveMode) -> Result<Resolution> {
+        let reporter = Reporter::silent();
+        super::resolve_project(root, cache_root, mode, &reporter)
+    }
+
+    fn sync_in_dir(
+        cwd: &Path,
+        cache_root: &Path,
+        locked: bool,
+        allow_high_sensitivity: bool,
+    ) -> Result<SyncSummary> {
+        let reporter = Reporter::silent();
+        super::sync_in_dir(cwd, cache_root, locked, allow_high_sensitivity, &reporter)
+    }
+
+    fn sync_in_dir_with_adapters(
+        cwd: &Path,
+        cache_root: &Path,
+        locked: bool,
+        allow_high_sensitivity: bool,
+        adapters: &[Adapter],
+    ) -> Result<SyncSummary> {
+        let reporter = Reporter::silent();
+        super::sync_in_dir_with_adapters(
+            cwd,
+            cache_root,
+            locked,
+            allow_high_sensitivity,
+            adapters,
+            &reporter,
+        )
+    }
+
+    fn doctor_in_dir(cwd: &Path, cache_root: &Path) -> Result<DoctorSummary> {
+        let reporter = Reporter::silent();
+        super::doctor_in_dir(cwd, cache_root, &reporter)
+    }
+
+    fn add_dependency_in_dir_with_adapters(
+        project_root: &Path,
+        cache_root: &Path,
+        url: &str,
+        tag: Option<&str>,
+        adapters: &[Adapter],
+    ) -> Result<AddSummary> {
+        let reporter = Reporter::silent();
+        add_dependency_in_dir_with_adapters_impl(
+            project_root,
+            cache_root,
+            url,
+            tag,
+            adapters,
+            &reporter,
+        )
+    }
+
+    fn remove_dependency_in_dir(
+        project_root: &Path,
+        cache_root: &Path,
+        package: &str,
+    ) -> Result<RemoveSummary> {
+        let reporter = Reporter::silent();
+        remove_dependency_in_dir_impl(project_root, cache_root, package, &reporter)
     }
 
     fn sync_all(project_root: &Path, cache_root: &Path) {

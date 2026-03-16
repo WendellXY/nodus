@@ -47,7 +47,7 @@ enum Command {
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let reporter = Reporter::stderr(cli.color);
-    let result = run_command(cli);
+    let result = run_command(cli, &reporter);
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -60,27 +60,85 @@ pub fn run() -> ExitCode {
     }
 }
 
-fn run_command(cli: Cli) -> anyhow::Result<()> {
+fn run_command(cli: Cli, reporter: &Reporter) -> anyhow::Result<()> {
     let cache_root = crate::cache::resolve_cache_root(cli.cache_path.as_deref())?;
 
     match cli.command {
         Command::Add { url, tag, adapter } => {
-            crate::git::add_dependency_with_adapters(&cache_root, &url, tag.as_deref(), &adapter)
+            let summary = crate::git::add_dependency_with_adapters(
+                &cache_root,
+                &url,
+                tag.as_deref(),
+                &adapter,
+                reporter,
+            )?;
+            reporter.finish(format!(
+                "added {} {} with adapters [{}]; wrote {} managed files",
+                summary.alias,
+                summary.tag,
+                format_adapters(&summary.adapters),
+                summary.managed_file_count,
+            ))?;
+            Ok(())
         }
-        Command::Remove { package } => crate::git::remove_dependency(&cache_root, &package),
-        Command::Init => crate::manifest::scaffold_init(),
+        Command::Remove { package } => {
+            let summary = crate::git::remove_dependency(&cache_root, &package, reporter)?;
+            reporter.finish(format!(
+                "removed {} and wrote {} managed files",
+                summary.alias, summary.managed_file_count,
+            ))?;
+            Ok(())
+        }
+        Command::Init => {
+            let summary = crate::manifest::scaffold_init(reporter)?;
+            reporter.finish(format!(
+                "created {}",
+                summary
+                    .created_paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ))?;
+            Ok(())
+        }
         Command::Sync {
             locked,
             allow_high_sensitivity,
             adapter,
-        } => crate::resolver::sync_with_adapters(
-            &cache_root,
-            locked,
-            allow_high_sensitivity,
-            &adapter,
-        ),
-        Command::Doctor => crate::resolver::doctor(&cache_root),
+        } => {
+            let summary = crate::resolver::sync_with_adapters(
+                &cache_root,
+                locked,
+                allow_high_sensitivity,
+                &adapter,
+                reporter,
+            )?;
+            reporter.finish(format!(
+                "{} packages, adapters [{}], {} managed files",
+                summary.package_count,
+                format_adapters(&summary.adapters),
+                summary.managed_file_count,
+            ))?;
+            Ok(())
+        }
+        Command::Doctor => {
+            let summary = crate::resolver::doctor(&cache_root, reporter)?;
+            reporter.finish(format!(
+                "project state is consistent across {} packages",
+                summary.package_count,
+            ))?;
+            Ok(())
+        }
     }
+}
+
+fn format_adapters(adapters: &[Adapter]) -> String {
+    adapters
+        .iter()
+        .map(|adapter| adapter.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

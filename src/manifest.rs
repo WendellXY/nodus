@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use toml::Table;
 
 use crate::adapters::Adapter;
+use crate::report::Reporter;
 
 pub const MANIFEST_FILE: &str = "nodus.toml";
 
@@ -77,6 +78,11 @@ pub struct LoadedManifest {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct InitSummary {
+    pub created_paths: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PackageContents {
     pub skills: Vec<SkillEntry>,
@@ -109,12 +115,12 @@ struct SkillFrontmatter {
     description: String,
 }
 
-pub fn scaffold_init() -> Result<()> {
+pub fn scaffold_init(reporter: &Reporter) -> Result<InitSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
-    scaffold_init_in_dir(&cwd)
+    scaffold_init_in_dir(&cwd, reporter)
 }
 
-pub fn scaffold_init_in_dir(root: &Path) -> Result<()> {
+pub fn scaffold_init_in_dir(root: &Path, reporter: &Reporter) -> Result<InitSummary> {
     let root = root
         .canonicalize()
         .with_context(|| format!("failed to access {}", root.display()))?;
@@ -131,10 +137,14 @@ pub fn scaffold_init_in_dir(root: &Path) -> Result<()> {
 
     fs::create_dir_all(&skill_dir)
         .with_context(|| format!("failed to create {}", skill_dir.display()))?;
+    reporter.status("Creating", manifest_path.display())?;
     crate::store::write_atomic(&manifest_path, default_manifest_contents().as_bytes())?;
+    reporter.status("Creating", skill_file.display())?;
     crate::store::write_atomic(&skill_file, default_skill_contents().as_bytes())?;
 
-    Ok(())
+    Ok(InitSummary {
+        created_paths: vec![manifest_path, skill_file],
+    })
 }
 
 pub fn load_root_from_dir(root: &Path) -> Result<LoadedManifest> {
@@ -952,8 +962,9 @@ playbook_ios = { github = "wenext-limited", tag = "v0.1.0" }
     #[test]
     fn init_scaffolds_a_minimal_manifest_and_example_skill() {
         let temp = TempDir::new().unwrap();
+        let reporter = Reporter::silent();
 
-        scaffold_init_in_dir(temp.path()).unwrap();
+        scaffold_init_in_dir(temp.path(), &reporter).unwrap();
 
         assert!(temp.path().join(MANIFEST_FILE).exists());
         assert!(temp.path().join("skills/example/SKILL.md").exists());

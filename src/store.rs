@@ -174,6 +174,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::report::Reporter;
     use crate::resolver::resolve_project_for_sync;
 
     fn write_file(path: &Path, contents: &str) {
@@ -193,7 +194,8 @@ mod tests {
             "---\nname: Review\ndescription: Example.\n---\n# Review\n",
         );
 
-        let resolution = resolve_project_for_sync(temp.path(), cache.path()).unwrap();
+        let reporter = Reporter::silent();
+        let resolution = resolve_project_for_sync(temp.path(), cache.path(), &reporter).unwrap();
         let stored = snapshot_resolution(cache.path(), &resolution).unwrap();
 
         assert_eq!(stored.len(), 1);
@@ -224,7 +226,8 @@ mod tests {
             "be consistent\n",
         );
 
-        let resolution = resolve_project_for_sync(temp.path(), cache.path()).unwrap();
+        let reporter = Reporter::silent();
+        let resolution = resolve_project_for_sync(temp.path(), cache.path(), &reporter).unwrap();
         let stored = snapshot_resolution(cache.path(), &resolution).unwrap();
         let snapshot_root = &stored[0].snapshot_root;
 
