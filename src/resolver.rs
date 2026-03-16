@@ -760,6 +760,19 @@ mod tests {
         (repo, url)
     }
 
+    fn tag_repo(path: &Path, tag: &str) {
+        let output = Command::new("git")
+            .args(["tag", tag])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     fn cache_dir() -> TempDir {
         TempDir::new().unwrap()
     }
@@ -908,11 +921,7 @@ shared = { path = "vendor/shared" }
         let repo = TempDir::new().unwrap();
         write_file(&repo.path().join("README.md"), "hello\n");
         init_git_repo(repo.path());
-        Command::new("git")
-            .args(["tag", "v0.1.0"])
-            .current_dir(repo.path())
-            .output()
-            .unwrap();
+        tag_repo(repo.path(), "v0.1.0");
 
         let error = add_dependency_in_dir_with_adapters(
             temp.path(),
@@ -925,6 +934,139 @@ shared = { path = "vendor/shared" }
         .to_string();
 
         assert!(error.contains("does not match the Nodus package layout"));
+    }
+
+    #[test]
+    fn add_dependency_accepts_manifest_only_wrapper_repo_and_syncs_transitive_git_plugins() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+
+        let leaf = TempDir::new().unwrap();
+        write_skill(&leaf.path().join("skills/checks"), "Checks");
+        init_git_repo(leaf.path());
+        tag_repo(leaf.path(), "v0.1.0");
+
+        let wrapper = TempDir::new().unwrap();
+        write_file(
+            &wrapper.path().join(MANIFEST_FILE),
+            &format!(
+                r#"
+[dependencies]
+leaf = {{ url = "{}", tag = "v0.1.0" }}
+"#,
+                leaf.path().to_string_lossy()
+            ),
+        );
+        init_git_repo(wrapper.path());
+        tag_repo(wrapper.path(), "v0.2.0");
+        let wrapper_alias = normalize_alias_from_url(&wrapper.path().to_string_lossy()).unwrap();
+
+        add_dependency_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            &wrapper.path().to_string_lossy(),
+            Some("v0.2.0"),
+            &Adapter::ALL,
+        )
+        .unwrap();
+
+        let manifest = load_root_from_dir(temp.path()).unwrap();
+        assert_eq!(manifest.manifest.dependencies.len(), 1);
+        assert!(manifest.manifest.dependencies.contains_key(&wrapper_alias));
+
+        let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+        assert_eq!(lockfile.packages.len(), 3);
+        assert!(
+            lockfile
+                .packages
+                .iter()
+                .any(|package| package.alias == "root")
+        );
+        let wrapper_package = lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == wrapper_alias)
+            .unwrap();
+        assert!(wrapper_package.skills.is_empty());
+        assert_eq!(wrapper_package.dependencies, vec!["leaf"]);
+        let leaf_package = lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == "leaf")
+            .unwrap();
+        assert_eq!(leaf_package.skills, vec!["checks"]);
+
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+        let leaf_package = resolution
+            .packages
+            .iter()
+            .find(|package| package.alias == "leaf")
+            .unwrap();
+        let managed_skill_id = namespaced_skill_id(leaf_package, "checks");
+        assert!(
+            temp.path()
+                .join(format!(".claude/skills/{managed_skill_id}/SKILL.md"))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn add_dependency_syncs_path_dependencies_inside_manifest_only_wrapper_repo() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+
+        let wrapper = TempDir::new().unwrap();
+        write_file(
+            &wrapper.path().join(MANIFEST_FILE),
+            r#"
+[dependencies]
+bundled = { path = "vendor/bundled" }
+"#,
+        );
+        write_skill(
+            &wrapper.path().join("vendor/bundled/skills/bundled"),
+            "Bundled",
+        );
+        init_git_repo(wrapper.path());
+        tag_repo(wrapper.path(), "v0.3.0");
+        let wrapper_alias = normalize_alias_from_url(&wrapper.path().to_string_lossy()).unwrap();
+
+        add_dependency_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            &wrapper.path().to_string_lossy(),
+            Some("v0.3.0"),
+            &Adapter::ALL,
+        )
+        .unwrap();
+
+        let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+        let wrapper_package = lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == wrapper_alias)
+            .unwrap();
+        assert_eq!(wrapper_package.dependencies, vec!["bundled"]);
+        let bundled_package = lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == "bundled")
+            .unwrap();
+        assert_eq!(bundled_package.source.kind, "path");
+        assert_eq!(bundled_package.skills, vec!["bundled"]);
+
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+        let bundled_package = resolution
+            .packages
+            .iter()
+            .find(|package| package.alias == "bundled")
+            .unwrap();
+        let managed_skill_id = namespaced_skill_id(bundled_package, "bundled");
+        assert!(
+            temp.path()
+                .join(format!(".claude/skills/{managed_skill_id}/SKILL.md"))
+                .exists()
+        );
     }
 
     #[test]

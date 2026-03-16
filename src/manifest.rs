@@ -275,10 +275,15 @@ impl LoadedManifest {
             }
         }
 
-        let allow_empty_package = role == PackageRole::Root;
+        let allow_empty_package = match role {
+            PackageRole::Root => true,
+            PackageRole::Dependency => {
+                self.manifest_path.is_some() && !self.manifest.dependencies.is_empty()
+            }
+        };
         if self.discovered.is_empty() && !allow_empty_package {
             bail!(
-                "package at {} must contain at least one of `agents/`, `commands/`, `rules/`, or `skills/`",
+                "package at {} must contain at least one of `agents/`, `commands/`, `rules/`, or `skills/`, or declare dependencies in nodus.toml",
                 self.root.display()
             );
         }
@@ -813,6 +818,23 @@ playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
             .unwrap_err()
             .to_string();
         assert!(error.contains("must contain at least one of"));
+    }
+
+    #[test]
+    fn accepts_dependency_repo_with_only_nested_dependencies() {
+        let temp = TempDir::new().unwrap();
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies]
+playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
+"#,
+        );
+
+        let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+        assert!(loaded.discovered.is_empty());
+        assert_eq!(loaded.manifest.dependencies.len(), 1);
     }
 
     #[test]
