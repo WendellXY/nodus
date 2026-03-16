@@ -423,12 +423,23 @@ fn gitignore_entry(project_root: &Path, path: &Path) -> Result<Option<(PathBuf, 
     }
 
     let pattern = if rest.first().map(String::as_str) == Some("skills") && rest.len() >= 2 {
-        format!("skills/{}/", rest[1])
+        skill_gitignore_pattern(runtime, &rest[1])
     } else {
         rest.join("/")
     };
 
     Ok(Some((project_root.join(runtime), pattern)))
+}
+
+fn skill_gitignore_pattern(runtime: &str, skill_dir: &str) -> String {
+    if matches!(runtime, ".claude" | ".codex")
+        && let Some((_, suffix)) = skill_dir.rsplit_once('_')
+        && !suffix.is_empty()
+    {
+        return format!("skills/*_{suffix}/");
+    }
+
+    format!("skills/{skill_dir}/")
 }
 
 fn render_gitignore(patterns: &BTreeSet<String>) -> String {

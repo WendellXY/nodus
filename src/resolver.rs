@@ -1086,7 +1086,8 @@ shared = { path = "vendor/shared" }
 
         assert!(codex_gitignore.contains("# Managed by nodus"));
         assert!(codex_gitignore.contains(".gitignore"));
-        assert!(codex_gitignore.contains(&format!("skills/{managed_skill_id}/")));
+        let (_, suffix) = managed_skill_id.rsplit_once('_').unwrap();
+        assert!(codex_gitignore.contains(&format!("skills/*_{suffix}/")));
         assert!(codex_gitignore.contains("rules/default.rules"));
     }
 
