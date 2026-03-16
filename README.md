@@ -2,7 +2,7 @@
 
 Agen is a local-first Rust CLI for managing project-scoped agent packages by convention instead of explicit export configuration.
 
-The current implementation discovers package content from repository folders, supports Git-tag dependencies cloned into `.agen/deps/`, locks exact commits in `agentpack.lock`, snapshots package contents into a content-addressed store, and emits managed runtime outputs for Claude, Codex, and OpenCode.
+The current implementation discovers package content from repository folders, supports Git-tag dependencies backed by a shared remote repository cache plus project-local worktrees in `.agen/deps/`, locks exact commits in `agentpack.lock`, snapshots package contents into a content-addressed store, and emits managed runtime outputs for Claude, Codex, and OpenCode.
 
 ## Status
 
@@ -17,7 +17,7 @@ The current MVP supports:
 - Git dependencies pinned by `tag` in the manifest and exact `rev` in the lockfile
 - `agen add <url>` with automatic latest-tag selection
 - `agen add <url> --tag <tag>` for explicit pinning
-- Managed Git clones under `.agen/deps/`
+- Shared Git repository cache with materialized worktrees under `.agen/deps/`
 - Deterministic `agentpack.lock`
 - Content-addressed snapshots under `.agen/store/sha256/`
 - Managed output emission for:
@@ -53,6 +53,14 @@ Then run it directly:
 agen <command>
 ```
 
+By default, Agen stores shared Git repository mirrors in the system cache directory for this app. On macOS, that is:
+
+```text
+~/Library/Caches/agen/
+```
+
+You can override that location for any command with `--cache-path <path>`.
+
 ## Quick Start
 
 Initialize a local package skeleton:
@@ -84,7 +92,7 @@ If the root project declares any `high` sensitivity capabilities:
 agen sync --allow-high-sensitivity
 ```
 
-Validate that the repo, managed clones, lockfile, and owned outputs are all consistent:
+Validate that the repo, shared-cache-backed dependency worktrees, lockfile, and owned outputs are all consistent:
 
 ```bash
 agen doctor
@@ -94,6 +102,12 @@ For reproducible CI:
 
 ```bash
 agen sync --locked
+```
+
+Use a custom shared cache root when needed:
+
+```bash
+agen --cache-path /tmp/agen-cache sync
 ```
 
 ## Manifest
@@ -174,11 +188,18 @@ You can still pin a specific tag explicitly:
 agen add <url> --tag <tag>
 ```
 
+You can also override the shared repository cache root for this command:
+
+```bash
+agen --cache-path /tmp/agen-cache add <url>
+```
+
 Behavior:
 
 - accepts a full Git URL or a GitHub shortcut like `wenext-limited/playbook-ios`
 - infers the dependency alias from the repo name
-- clones into `.agen/deps/<alias>/`
+- fetches a shared bare mirror into the cache root
+- materializes `.agen/deps/<alias>/` as a Git worktree backed by that shared mirror
 - resolves the latest tag when `--tag` is omitted
 - checks out the resolved tag
 - validates the discovered package layout
@@ -200,6 +221,7 @@ Resolves the root project plus configured dependencies, snapshots their discover
 
 Options:
 
+- `--cache-path <path>`: override the shared Git repository cache root
 - `--locked`: fail if `agentpack.lock` would change
 - `--allow-high-sensitivity`: allow packages that declare `high` sensitivity capabilities
 
@@ -208,7 +230,8 @@ Options:
 Checks that:
 
 - the root manifest parses
-- dependency clones exist under `.agen/deps/`
+- dependency worktrees exist under `.agen/deps/`
+- shared repository mirrors exist in the cache root with the expected origin URL
 - discovered layouts are valid
 - Git dependencies are at the expected locked revision
 - `agentpack.lock` is up to date
@@ -248,6 +271,15 @@ Resolved packages are snapshotted under:
 ```
 
 Sync emits from those snapshots rather than directly from mutable working trees.
+
+## Shared Git Cache
+
+Git dependencies use two on-disk locations:
+
+- Shared remote mirrors live under `<cache-root>/repositories/<repo-name>-<url-hash>.git`
+- Each project gets a local materialized dependency worktree under `.agen/deps/<alias>/`
+
+This follows the same general shape as SwiftPM: fetched repository data is shared across projects, while each project still has its own local checkout/worktree state.
 
 ## Runtime Output Mapping
 
