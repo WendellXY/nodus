@@ -230,12 +230,11 @@ main() {
   download "${ASSET_URL}" "${archive_path}"
 
   if [ "${VERIFY_CHECKSUMS}" -eq 1 ]; then
-    log "Downloading ${CHECKSUM_NAME}"
     if download "${CHECKSUM_URL}" "${checksum_path}"; then
-      log "Verifying checksum"
+      log "Verifying download"
       verify_checksum "${archive_path}" "${checksum_path}"
     else
-      log "Checksum file not found for ${VERSION}; continuing without verification."
+      log "Checksum unavailable for ${VERSION}; continuing without verification."
     fi
   fi
 
