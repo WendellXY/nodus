@@ -62,6 +62,20 @@ fn snapshot_package(
     package: &crate::resolver::ResolvedPackage,
 ) -> Result<PathBuf> {
     let digest_dir = store_root.join(digest_directory_name(&package.digest)?);
+    let files = package.manifest.package_files()?;
+    if digest_dir.exists() {
+        if snapshot_is_complete(&digest_dir, &package.manifest.root, &files)? {
+            return Ok(digest_dir);
+        }
+
+        fs::remove_dir_all(&digest_dir).with_context(|| {
+            format!(
+                "failed to remove incomplete snapshot {}",
+                digest_dir.display()
+            )
+        })?;
+    }
+
     if digest_dir.exists() {
         return Ok(digest_dir);
     }
@@ -81,7 +95,6 @@ fn snapshot_package(
     fs::create_dir_all(&staging_root)
         .with_context(|| format!("failed to create staging dir {}", staging_root.display()))?;
 
-    let files = package.manifest.package_files()?;
     for file in files {
         let relative = file.strip_prefix(&package.manifest.root).with_context(|| {
             format!("failed to make {} relative to package root", file.display())
@@ -128,6 +141,23 @@ fn snapshot_package(
     }
 }
 
+fn snapshot_is_complete(
+    snapshot_root: &Path,
+    package_root: &Path,
+    files: &[PathBuf],
+) -> Result<bool> {
+    for file in files {
+        let relative = file.strip_prefix(package_root).with_context(|| {
+            format!("failed to make {} relative to package root", file.display())
+        })?;
+        if !snapshot_root.join(relative).is_file() {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
 fn digest_directory_name(digest: &str) -> Result<&str> {
     digest
         .strip_prefix("sha256:")
@@ -141,7 +171,6 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::manifest::MANIFEST_FILE;
     use crate::resolver::resolve_project_for_sync;
 
     fn write_file(path: &Path, contents: &str) {
@@ -159,28 +188,43 @@ mod tests {
             &temp.path().join("skills/review/SKILL.md"),
             "---\nname: Review\ndescription: Example.\n---\n# Review\n",
         );
-        write_file(
-            &temp.path().join(MANIFEST_FILE),
-            r#"
-api_version = "agentpack/v0"
-name = "root"
-version = "0.1.0"
-
-[[exports.skills]]
-id = "review"
-path = "skills/review"
-"#,
-        );
 
         let resolution = resolve_project_for_sync(temp.path()).unwrap();
         let stored = snapshot_resolution(&resolution).unwrap();
 
         assert_eq!(stored.len(), 1);
-        assert!(stored[0].snapshot_root.join(MANIFEST_FILE).exists());
         assert!(
             stored[0]
                 .snapshot_root
                 .join("skills/review/SKILL.md")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn recreates_incomplete_snapshots() {
+        let temp = TempDir::new().unwrap();
+        write_file(
+            &temp.path().join("skills/review/SKILL.md"),
+            "---\nname: Review\ndescription: Example.\n---\n# Review\n",
+        );
+        write_file(
+            &temp.path().join("rules/common/coding-style.md"),
+            "be consistent\n",
+        );
+
+        let resolution = resolve_project_for_sync(temp.path()).unwrap();
+        let stored = snapshot_resolution(&resolution).unwrap();
+        let snapshot_root = &stored[0].snapshot_root;
+
+        fs::remove_file(snapshot_root.join("rules/common/coding-style.md")).unwrap();
+        let rebuilt = snapshot_resolution(&resolution).unwrap();
+
+        assert_eq!(rebuilt[0].snapshot_root, *snapshot_root);
+        assert!(
+            rebuilt[0]
+                .snapshot_root
+                .join("rules/common/coding-style.md")
                 .exists()
         );
     }
