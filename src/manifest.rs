@@ -8,7 +8,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use toml::Table;
 
-pub const MANIFEST_FILE: &str = "agentpack.toml";
+pub const MANIFEST_FILE: &str = "nodus.toml";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Manifest {

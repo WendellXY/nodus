@@ -13,7 +13,7 @@ The current MVP supports:
   - `agents/`
   - `rules/`
   - `commands/`
-- Minimal root `agentpack.toml`
+- Minimal root `nodus.toml`
 - Git dependencies pinned by `tag` in the manifest and exact `rev` in the lockfile
 - `nodus add <url>` with automatic latest-tag selection
 - `nodus add <url> --tag <tag>` for explicit pinning
@@ -71,7 +71,7 @@ nodus init
 
 That creates:
 
-- `agentpack.toml`
+- `nodus.toml`
 - `skills/example/SKILL.md`
 
 Add a Git dependency by tag:
@@ -186,7 +186,7 @@ Discovered `commands/` content is currently validated and locked, but not emitte
 nodus add <url>
 ```
 
-By default, Nodus resolves the latest Git tag, writes that tag into `agentpack.toml`, and immediately runs a normal `nodus sync`.
+By default, Nodus resolves the latest Git tag, writes that tag into `nodus.toml`, and immediately runs a normal `nodus sync`.
 
 You can still pin a specific tag explicitly:
 
@@ -209,7 +209,7 @@ Behavior:
 - resolves the latest tag when `--tag` is omitted
 - checks out the resolved tag
 - validates the discovered package layout
-- creates or updates `agentpack.toml`
+- creates or updates `nodus.toml`
 
 Example:
 
@@ -219,11 +219,11 @@ nodus add wenext-limited/playbook-ios
 
 ### `nodus init`
 
-Creates an empty `agentpack.toml` plus `skills/example/SKILL.md`.
+Creates an empty `nodus.toml` plus `skills/example/SKILL.md`.
 
 ### `nodus uninstall`
 
-Removes one dependency from `agentpack.toml` and runs the normal sync flow to update
+Removes one dependency from `nodus.toml` and runs the normal sync flow to update
 `agentpack.lock` and prune managed runtime files. The package argument accepts either the
 dependency alias or a repository reference like `owner/repo`.
 
