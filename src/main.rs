@@ -7,6 +7,7 @@ mod lockfile;
 mod manifest;
 mod report;
 mod resolver;
+mod review;
 mod selection;
 mod store;
 

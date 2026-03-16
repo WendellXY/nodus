@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use crate::adapters::Adapter;
 use crate::manifest::DependencyComponent;
 use crate::report::Reporter;
+use crate::review::ReviewProvider;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -67,6 +68,30 @@ enum Command {
         tag: Option<String>,
         #[arg(long, conflicts_with = "tag", help = "Inspect a specific Git branch")]
         branch: Option<String>,
+    },
+    #[command(about = "Use an AI review agent to assess whether a package graph looks safe to use")]
+    Review {
+        #[arg(
+            default_value = ".",
+            help = "Dependency alias, local package path, Git URL, or GitHub shortcut like owner/repo"
+        )]
+        package: String,
+        #[arg(long, conflicts_with = "branch", help = "Inspect a specific Git tag")]
+        tag: Option<String>,
+        #[arg(long, conflicts_with = "tag", help = "Inspect a specific Git branch")]
+        branch: Option<String>,
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = ReviewProvider::Openai,
+            help = "LLM provider to use for the safety review"
+        )]
+        provider: ReviewProvider,
+        #[arg(
+            long,
+            help = "Specific model id to use; defaults to $MENTRA_MODEL or the provider's newest available model"
+        )]
+        model: Option<String>,
     },
     #[command(about = "Create a minimal nodus.toml and example skill")]
     Init,
@@ -164,6 +189,31 @@ fn run_command_in_dir(
             branch.as_deref(),
             reporter,
         ),
+        Command::Review {
+            package,
+            tag,
+            branch,
+            provider,
+            model,
+        } => {
+            let summary = crate::review::review_package_in_dir(
+                cwd,
+                cache_root,
+                crate::review::ReviewRequest {
+                    package: &package,
+                    tag: tag.as_deref(),
+                    branch: branch.as_deref(),
+                    provider,
+                    model: model.as_deref(),
+                },
+                reporter,
+            )?;
+            reporter.finish(format!(
+                "reviewed {} packages with {}",
+                summary.package_count, summary.provider
+            ))?;
+            Ok(())
+        }
         Command::Init => {
             let summary = crate::manifest::scaffold_init_in_dir(cwd, reporter)?;
             reporter.finish(format!(
@@ -362,6 +412,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_review_subcommand() {
+        let cli = Cli::try_parse_from([
+            "nodus",
+            "review",
+            "obra/superpowers",
+            "--provider",
+            "anthropic",
+            "--model",
+            "claude-sonnet",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Review {
+                package,
+                tag,
+                branch,
+                provider,
+                model,
+            } => {
+                assert_eq!(package, "obra/superpowers");
+                assert_eq!(tag, None);
+                assert_eq!(branch, None);
+                assert_eq!(provider, crate::review::ReviewProvider::Anthropic);
+                assert_eq!(model.as_deref(), Some("claude-sonnet"));
+            }
+            other => panic!("expected review command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn root_help_describes_commands() {
         let help = <Cli as clap::CommandFactory>::command()
             .render_long_help()
@@ -370,6 +451,9 @@ mod tests {
         assert!(help.contains("Nodus resolves agent packages from local paths and Git tags"));
         assert!(help.contains("Add a dependency and run sync"));
         assert!(help.contains("Display resolved package metadata"));
+        assert!(help.contains(
+            "Use an AI review agent to assess whether a package graph looks safe to use"
+        ));
         assert!(help.contains("Validate lockfile, shared store, and managed output consistency"));
     }
 
@@ -386,6 +470,22 @@ mod tests {
         assert!(help.contains("Pin a specific Git tag instead of resolving the latest tag"));
         assert!(help.contains("Select one or more adapters to persist for this repository"));
         assert!(help.contains("Select which dependency components to install from the package"));
+    }
+
+    #[test]
+    fn review_help_describes_arguments() {
+        let mut root = <Cli as clap::CommandFactory>::command();
+        let help = root
+            .find_subcommand_mut("review")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains(
+            "Dependency alias, local package path, Git URL, or GitHub shortcut like owner/repo"
+        ));
+        assert!(help.contains("LLM provider to use for the safety review"));
+        assert!(help.contains("Specific model id to use"));
     }
 
     #[test]
