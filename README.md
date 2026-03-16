@@ -41,9 +41,19 @@ Not implemented yet:
 
 ## Install
 
-Nodus is published on crates.io and can be installed with the standard Cargo workflow for released crates.
+Install the released crate from crates.io:
 
-After installation, run it as:
+```bash
+cargo install nodus
+```
+
+Build or install from the current checkout:
+
+```bash
+cargo install --path .
+```
+
+After installation, run:
 
 ```bash
 nodus <command>
