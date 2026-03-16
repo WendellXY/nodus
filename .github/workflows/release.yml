@@ -4,6 +4,12 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing release tag to build and upload assets for
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -34,11 +40,14 @@ jobs:
             archive_ext: zip
 
     env:
-      ASSET_BASENAME: nodus-${{ github.event.release.tag_name }}-${{ matrix.target }}
+      RELEASE_TAG: ${{ inputs.tag_name || github.event.release.tag_name }}
+      ASSET_BASENAME: nodus-${{ inputs.tag_name || github.event.release.tag_name }}-${{ matrix.target }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -72,4 +81,5 @@ jobs:
       - name: Upload release archive
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: dist/${{ env.ASSET_BASENAME }}.${{ matrix.archive_ext }}
