@@ -101,7 +101,7 @@ nodus doctor
 Remove one configured dependency and prune its managed outputs:
 
 ```bash
-nodus uninstall playbook_ios
+nodus remove playbook_ios
 ```
 
 For reproducible CI:
@@ -221,7 +221,7 @@ nodus add wenext-limited/playbook-ios
 
 Creates an empty `nodus.toml` plus `skills/example/SKILL.md`.
 
-### `nodus uninstall`
+### `nodus remove`
 
 Removes one dependency from `nodus.toml` and runs the normal sync flow to update
 `nodus.lock` and prune managed runtime files. The package argument accepts either the
