@@ -60,8 +60,16 @@ pub struct ReviewRequest<'a> {
 pub fn review_package_in_dir(
     _cwd: &Path,
     _cache_root: &Path,
-    _request: ReviewRequest<'_>,
+    request: ReviewRequest<'_>,
     _reporter: &Reporter,
 ) -> Result<ReviewSummary> {
+    let ReviewRequest {
+        package,
+        tag,
+        branch,
+        provider,
+        model,
+    } = request;
+    let _ = (package, tag, branch, provider, model);
     bail!("`nodus review` is currently supported only on macOS and Linux");
 }
