@@ -157,6 +157,12 @@ struct ClaudeMarketplacePlugin {
     source: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ClaudePluginMetadata {
+    #[serde(default)]
+    version: Option<String>,
+}
+
 #[allow(dead_code)]
 pub fn scaffold_init(reporter: &Reporter) -> Result<InitSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
@@ -225,6 +231,10 @@ pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
         if let Some(marketplace_loaded) = load_claude_marketplace_wrapper(&loaded)? {
             loaded = marketplace_loaded;
         }
+    }
+
+    if loaded.manifest.version.is_none() {
+        loaded.manifest.version = load_claude_plugin_version(&loaded.root)?;
     }
 
     loaded.validate(role)?;
@@ -627,7 +637,7 @@ fn load_claude_marketplace_wrapper(loaded: &LoadedManifest) -> Result<Option<Loa
             bail!("plugin `{name}` source `{source}` must not point at the package root");
         }
 
-        load_dependency_from_dir(&plugin_root).with_context(|| {
+        let plugin_manifest = load_dependency_from_dir(&plugin_root).with_context(|| {
             format!("plugin `{name}` source `{source}` does not match the Nodus package layout")
         })?;
 
@@ -637,7 +647,9 @@ fn load_claude_marketplace_wrapper(loaded: &LoadedManifest) -> Result<Option<Loa
                 github: None,
                 url: None,
                 path: Some(source_path),
-                tag: None,
+                tag: plugin_manifest
+                    .effective_version()
+                    .map(|version| version.to_string()),
                 components: None,
             },
         );
@@ -916,6 +928,33 @@ pub fn normalize_dependency_alias(value: &str) -> Result<String> {
     Ok(alias)
 }
 
+fn load_claude_plugin_version(root: &Path) -> Result<Option<Version>> {
+    let metadata_path = root.join("claude-code.json");
+    if !metadata_path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&metadata_path)
+        .with_context(|| format!("failed to read {}", metadata_path.display()))?;
+    let metadata: ClaudePluginMetadata = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse JSON in {}", metadata_path.display()))?;
+    let Some(version) = metadata.version else {
+        return Ok(None);
+    };
+
+    let version = version.trim();
+    if version.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(Version::parse(version).with_context(|| {
+        format!(
+            "failed to parse Claude plugin version `{version}` in {}",
+            metadata_path.display()
+        )
+    })?))
+}
+
 fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
     path.canonicalize()
         .with_context(|| format!("failed to canonicalize {}", path.display()))
@@ -975,6 +1014,13 @@ mod tests {
 
     fn write_marketplace(root: &Path, contents: &str) {
         write_file(&root.join(".claude-plugin/marketplace.json"), contents);
+    }
+
+    fn write_claude_plugin_json(root: &Path, version: &str) {
+        write_file(
+            &root.join("claude-code.json"),
+            &format!("{{\n  \"name\": \"plugin\",\n  \"version\": \"{version}\"\n}}\n"),
+        );
     }
 
     #[test]
@@ -1081,6 +1127,7 @@ playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
                 .join(".claude-plugin/plugins/axiom/skills/review/SKILL.md"),
             "---\nname: Review\ndescription: Review code safely.\n---\n# Review\n",
         );
+        write_claude_plugin_json(&temp.path().join(".claude-plugin/plugins/axiom"), "2.34.0");
 
         let loaded = load_dependency_from_dir(temp.path()).unwrap();
 
@@ -1090,6 +1137,7 @@ playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
             dependency.path.as_deref(),
             Some(Path::new("./.claude-plugin/plugins/axiom"))
         );
+        assert_eq!(dependency.tag.as_deref(), Some("2.34.0"));
 
         let package_files = loaded.package_files().unwrap();
         assert!(
@@ -1171,6 +1219,20 @@ playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
                 .get("axiom")
                 .and_then(|dependency| dependency.path.as_deref()),
             Some(Path::new("./plugins/axiom"))
+        );
+    }
+
+    #[test]
+    fn reads_claude_plugin_version_from_json() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_claude_plugin_json(temp.path(), "2.34.0");
+
+        let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+        assert_eq!(
+            loaded.manifest.version,
+            Some(Version::parse("2.34.0").unwrap())
         );
     }
 

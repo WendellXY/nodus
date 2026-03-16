@@ -837,6 +837,13 @@ mod tests {
         write_file(&path.join(".claude-plugin/marketplace.json"), contents);
     }
 
+    fn write_claude_plugin_json(path: &Path, version: &str) {
+        write_file(
+            &path.join("claude-code.json"),
+            &format!("{{\n  \"name\": \"plugin\",\n  \"version\": \"{version}\"\n}}\n"),
+        );
+    }
+
     fn init_git_repo(path: &Path) {
         let run = |args: &[&str]| {
             let output = Command::new("git")
@@ -882,6 +889,19 @@ mod tests {
     fn tag_repo(path: &Path, tag: &str) {
         let output = Command::new("git")
             .args(["tag", tag])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn rename_current_branch(path: &Path, branch: &str) {
+        let output = Command::new("git")
+            .args(["branch", "-m", branch])
             .current_dir(path)
             .output()
             .unwrap();
@@ -1130,6 +1150,29 @@ shared = { path = "vendor/shared" }
     }
 
     #[test]
+    fn add_dependency_uses_default_branch_when_repo_has_no_tags() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+        rename_current_branch(repo.path(), "main");
+
+        add_dependency_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            None,
+            &Adapter::ALL,
+            &[],
+        )
+        .unwrap();
+
+        let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("tag = \"main\""));
+    }
+
+    #[test]
     fn add_dependency_rejects_repo_without_supported_directories() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
@@ -1262,6 +1305,10 @@ leaf = {{ url = "{}", tag = "v0.1.0" }}
                 .join(".claude-plugin/plugins/axiom/commands/build.md"),
             "# Build\n",
         );
+        write_claude_plugin_json(
+            &wrapper.path().join(".claude-plugin/plugins/axiom"),
+            "2.34.0",
+        );
         init_git_repo(wrapper.path());
         tag_repo(wrapper.path(), "v0.4.0");
         let wrapper_alias = normalize_alias_from_url(&wrapper.path().to_string_lossy()).unwrap();
@@ -1290,6 +1337,7 @@ leaf = {{ url = "{}", tag = "v0.1.0" }}
             .iter()
             .find(|package| package.alias == "axiom")
             .unwrap();
+        assert_eq!(plugin_package.version_tag.as_deref(), Some("2.34.0"));
         assert_eq!(plugin_package.skills, vec!["review"]);
         assert_eq!(plugin_package.agents, vec!["security"]);
         assert_eq!(plugin_package.commands, vec!["build"]);

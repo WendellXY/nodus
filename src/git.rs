@@ -170,7 +170,16 @@ pub fn ensure_git_dependency(
         Some(value) => value.to_string(),
         None => {
             reporter.status("Resolving", format!("latest tag for {normalized_url}"))?;
-            latest_tag(&mirror_path)?
+            match latest_tag_name(&mirror_path)? {
+                Some(tag) => tag,
+                None => {
+                    let branch = default_branch(&mirror_path)?;
+                    reporter.note(format!(
+                        "no git tags found for {normalized_url}; using default branch {branch}"
+                    ))?;
+                    branch
+                }
+            }
         }
     };
     let rev = resolve_tag_to_rev(&mirror_path, &resolved_tag)?;
@@ -217,7 +226,12 @@ pub fn resolve_tag_to_rev(path: &Path, tag: &str) -> Result<String> {
     git_output(path, ["rev-parse", &format!("{tag}^{{commit}}")])
 }
 
+#[allow(dead_code)]
 pub fn latest_tag(path: &Path) -> Result<String> {
+    latest_tag_name(path)?.ok_or_else(|| anyhow!("no git tags found in {}", path.display()))
+}
+
+fn latest_tag_name(path: &Path) -> Result<Option<String>> {
     let tags = git_output(
         path,
         [
@@ -227,10 +241,15 @@ pub fn latest_tag(path: &Path) -> Result<String> {
             "refs/tags",
         ],
     )?;
-    tags.lines()
+    Ok(tags
+        .lines()
         .find(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_string())
-        .ok_or_else(|| anyhow!("no git tags found in {}", path.display()))
+        .map(|line| line.trim().to_string()))
+}
+
+pub fn default_branch(path: &Path) -> Result<String> {
+    git_output(path, ["symbolic-ref", "--short", "HEAD"])
+        .with_context(|| format!("failed to determine default branch for {}", path.display()))
 }
 
 pub fn normalize_git_url(url: &str) -> String {
@@ -567,6 +586,19 @@ mod tests {
         run(&["commit", "-m", "initial"]);
     }
 
+    fn rename_current_branch(path: &Path, branch: &str) {
+        let output = Command::new("git")
+            .args(["branch", "-m", branch])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn normalizes_repo_names_into_aliases() {
         assert_eq!(
@@ -671,6 +703,31 @@ mod tests {
         }
 
         assert_eq!(latest_tag(temp.path()).unwrap(), "v1.2.0");
+    }
+
+    #[test]
+    fn resolves_default_branch_when_repo_has_no_tags() {
+        let cache_root = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_file(
+            &repo.path().join("skills/review/SKILL.md"),
+            "---\nname: Review\ndescription: Review code safely.\n---\n# Review\n",
+        );
+        init_git_repo(repo.path());
+        rename_current_branch(repo.path(), "main");
+
+        let reporter = Reporter::silent();
+        let checkout = ensure_git_dependency(
+            cache_root.path(),
+            &repo.path().to_string_lossy(),
+            None,
+            true,
+            &reporter,
+        )
+        .unwrap();
+
+        assert_eq!(checkout.tag, "main");
+        assert_eq!(checkout.rev, current_rev(repo.path()).unwrap());
     }
 
     #[test]
