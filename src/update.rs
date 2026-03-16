@@ -1,12 +1,15 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use rayon::prelude::*;
+use semver::Version;
 
 use crate::git::{ensure_git_dependency, latest_tag, prepare_repository_mirror};
 use crate::lockfile::Lockfile;
 use crate::manifest::{
-    DependencySourceKind, RequestedGitRef, load_dependency_from_dir, load_root_from_dir,
-    write_manifest,
+    DependencySourceKind, DependencySpec, RequestedGitRef, load_dependency_from_dir,
+    load_root_from_dir, write_manifest,
 };
 use crate::report::Reporter;
 use crate::resolver::sync_in_dir;
@@ -15,6 +18,27 @@ use crate::resolver::sync_in_dir;
 pub struct UpdateSummary {
     pub updated_count: usize,
     pub managed_file_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct DependencySnapshot {
+    alias: String,
+    spec: DependencySpec,
+}
+
+#[derive(Debug, Clone)]
+enum DependencyUpdatePlan {
+    Path,
+    GitTag {
+        current_tag: String,
+        latest_tag: String,
+    },
+    GitBranch {
+        branch: String,
+        locked_rev: Option<String>,
+        latest_rev: String,
+        latest_version: Option<Version>,
+    },
 }
 
 pub fn update_direct_dependencies_in_dir(
@@ -38,54 +62,58 @@ pub fn update_direct_dependencies_in_dir(
         format!("{dependency_count} direct dependencies"),
     )?;
     let existing_lockfile = load_lockfile(cwd)?;
+    let dependencies = root
+        .manifest
+        .dependencies
+        .iter()
+        .map(|(alias, spec)| DependencySnapshot {
+            alias: alias.clone(),
+            spec: spec.clone(),
+        })
+        .collect::<Vec<_>>();
+    let plans = plan_dependency_updates(&dependencies, existing_lockfile.as_ref(), cache_root)?;
     let mut updated_count = 0;
     let mut manifest_changed = false;
 
     for (alias, dependency) in &mut root.manifest.dependencies {
-        match dependency.source_kind()? {
-            DependencySourceKind::Path => {}
-            DependencySourceKind::Git => {
-                let url = dependency.resolved_git_url()?;
-                match dependency.requested_git_ref()? {
-                    RequestedGitRef::Tag(current_tag) => {
-                        let mirror = prepare_repository_mirror(cache_root, &url, true, reporter)?;
-                        let latest = latest_tag(&mirror)?;
-                        if latest != current_tag {
-                            reporter
-                                .note(format!("updating {alias} tag {current_tag} -> {latest}"))?;
-                            dependency.tag = Some(latest);
-                            updated_count += 1;
-                            manifest_changed = true;
-                        }
-                    }
-                    RequestedGitRef::Branch(branch) => {
-                        let checkout = ensure_git_dependency(
-                            cache_root,
-                            &url,
-                            None,
-                            Some(branch),
-                            true,
-                            reporter,
-                        )?;
-                        let latest_version = load_dependency_from_dir(&checkout.path)?
-                            .effective_version()
-                            .or_else(|| dependency.version.clone());
-                        let locked_rev = locked_rev(existing_lockfile.as_ref(), alias);
-                        if locked_rev.as_deref() != Some(checkout.rev.as_str()) {
-                            let previous = locked_rev
-                                .map(|rev| short_rev(&rev))
-                                .unwrap_or_else(|| "none".into());
-                            reporter.note(format!(
-                                "updating {alias} branch {branch} {previous} -> {}",
-                                short_rev(&checkout.rev)
-                            ))?;
-                            updated_count += 1;
-                        }
-                        if dependency.version != latest_version {
-                            dependency.version = latest_version;
-                            manifest_changed = true;
-                        }
-                    }
+        let plan = plans
+            .get(alias.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing dependency update plan for `{alias}`"))?;
+        match plan {
+            DependencyUpdatePlan::Path => {}
+            DependencyUpdatePlan::GitTag {
+                current_tag,
+                latest_tag,
+            } => {
+                if latest_tag != current_tag {
+                    reporter.note(format!(
+                        "updating {alias} tag {current_tag} -> {latest_tag}"
+                    ))?;
+                    dependency.tag = Some(latest_tag.clone());
+                    updated_count += 1;
+                    manifest_changed = true;
+                }
+            }
+            DependencyUpdatePlan::GitBranch {
+                branch,
+                locked_rev,
+                latest_rev,
+                latest_version,
+            } => {
+                if locked_rev.as_deref() != Some(latest_rev.as_str()) {
+                    let previous = locked_rev
+                        .as_ref()
+                        .map(|rev| short_rev(rev))
+                        .unwrap_or_else(|| "none".into());
+                    reporter.note(format!(
+                        "updating {alias} branch {branch} {previous} -> {}",
+                        short_rev(latest_rev)
+                    ))?;
+                    updated_count += 1;
+                }
+                if &dependency.version != latest_version {
+                    dependency.version = latest_version.clone();
+                    manifest_changed = true;
                 }
             }
         }
@@ -108,6 +136,100 @@ pub fn update_direct_dependencies_in_dir(
         updated_count,
         managed_file_count: sync_summary.managed_file_count,
     })
+}
+
+fn plan_dependency_updates(
+    dependencies: &[DependencySnapshot],
+    existing_lockfile: Option<&Lockfile>,
+    cache_root: &Path,
+) -> Result<BTreeMap<String, DependencyUpdatePlan>> {
+    let mut plans = BTreeMap::new();
+    let mut git_groups = BTreeMap::<String, Vec<&DependencySnapshot>>::new();
+
+    for dependency in dependencies {
+        match dependency.spec.source_kind()? {
+            DependencySourceKind::Path => {
+                plans.insert(dependency.alias.clone(), DependencyUpdatePlan::Path);
+            }
+            DependencySourceKind::Git => {
+                let url = dependency.spec.resolved_git_url()?;
+                git_groups.entry(url).or_default().push(dependency);
+            }
+        }
+    }
+
+    let git_plans = git_groups
+        .into_par_iter()
+        .map(|(url, dependencies)| {
+            let reporter = Reporter::silent();
+            let mut latest_tag_name = None;
+            let mut branch_updates = BTreeMap::<String, (String, Option<Version>)>::new();
+            let mut group_plans = Vec::with_capacity(dependencies.len());
+
+            for dependency in dependencies {
+                let plan = match dependency.spec.requested_git_ref()? {
+                    RequestedGitRef::Tag(current_tag) => {
+                        let latest_tag = match latest_tag_name.clone() {
+                            Some(tag) => tag,
+                            None => {
+                                let mirror =
+                                    prepare_repository_mirror(cache_root, &url, true, &reporter)?;
+                                let tag = latest_tag(&mirror)?;
+                                latest_tag_name = Some(tag.clone());
+                                tag
+                            }
+                        };
+                        DependencyUpdatePlan::GitTag {
+                            current_tag: current_tag.to_string(),
+                            latest_tag,
+                        }
+                    }
+                    RequestedGitRef::Branch(branch) => {
+                        let (latest_rev, latest_version) = match branch_updates.get(branch) {
+                            Some((rev, version)) => (rev.clone(), version.clone()),
+                            None => {
+                                let checkout = ensure_git_dependency(
+                                    cache_root,
+                                    &url,
+                                    None,
+                                    Some(branch),
+                                    true,
+                                    &reporter,
+                                )?;
+                                let version = load_dependency_from_dir(&checkout.path)?
+                                    .effective_version()
+                                    .or_else(|| dependency.spec.version.clone());
+                                branch_updates.insert(
+                                    branch.to_string(),
+                                    (checkout.rev.clone(), version.clone()),
+                                );
+                                (checkout.rev, version)
+                            }
+                        };
+                        DependencyUpdatePlan::GitBranch {
+                            branch: branch.to_string(),
+                            locked_rev: locked_rev(existing_lockfile, &dependency.alias),
+                            latest_rev,
+                            latest_version,
+                        }
+                    }
+                };
+                group_plans.push((dependency.alias.clone(), plan));
+            }
+
+            Ok(group_plans)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+
+    for group in git_plans {
+        for (alias, plan) in group {
+            plans.insert(alias, plan);
+        }
+    }
+
+    Ok(plans)
 }
 
 fn load_lockfile(cwd: &Path) -> Result<Option<Lockfile>> {
