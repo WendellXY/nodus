@@ -26,6 +26,8 @@ pub struct Manifest {
     pub capabilities: Vec<Capability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapters: Option<AdapterConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_hooks: Option<LaunchHookConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, DependencySpec>,
 }
@@ -42,6 +44,11 @@ impl AdapterConfig {
         enabled.dedup();
         Self { enabled }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchHookConfig {
+    pub sync_on_startup: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,6 +306,17 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
         output.push_str(&format!("enabled = [{encoded}]\n"));
     }
 
+    if let Some(launch_hooks) = &manifest.launch_hooks {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str("[launch_hooks]\n");
+        output.push_str(&format!(
+            "sync_on_startup = {}\n",
+            launch_hooks.sync_on_startup
+        ));
+    }
+
     if !manifest.dependencies.is_empty() {
         if !output.is_empty() && !output.ends_with('\n') {
             output.push('\n');
@@ -365,6 +383,11 @@ impl LoadedManifest {
             if sorted.len() != adapters.enabled.len() {
                 bail!("manifest field `adapters.enabled` must not contain duplicates");
             }
+        }
+        if let Some(launch_hooks) = &self.manifest.launch_hooks
+            && !launch_hooks.sync_on_startup
+        {
+            bail!("manifest field `launch_hooks.sync_on_startup` must be true when set");
         }
 
         let allow_empty_package = match role {
@@ -500,6 +523,18 @@ impl Manifest {
 
     pub fn set_enabled_adapters(&mut self, adapters: &[Adapter]) {
         self.adapters = Some(AdapterConfig::normalized(adapters));
+    }
+
+    pub fn sync_on_launch_enabled(&self) -> bool {
+        self.launch_hooks
+            .as_ref()
+            .is_some_and(|hooks| hooks.sync_on_startup)
+    }
+
+    pub fn set_sync_on_launch(&mut self, enabled: bool) {
+        self.launch_hooks = enabled.then_some(LaunchHookConfig {
+            sync_on_startup: true,
+        });
     }
 }
 
@@ -1684,6 +1719,21 @@ playbook_ios = { github = "wenext-limited", tag = "v0.1.0" }
     }
 
     #[test]
+    fn serializes_launch_hooks() {
+        let manifest = Manifest {
+            launch_hooks: Some(LaunchHookConfig {
+                sync_on_startup: true,
+            }),
+            ..Manifest::default()
+        };
+
+        let encoded = serialize_manifest(&manifest).unwrap();
+
+        assert!(encoded.contains("[launch_hooks]"));
+        assert!(encoded.contains("sync_on_startup = true"));
+    }
+
+    #[test]
     fn rejects_empty_adapter_selection() {
         let temp = TempDir::new().unwrap();
         write_valid_skill(temp.path());
@@ -1729,6 +1779,22 @@ enabled = ["unknown"]
 
         let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
         assert!(error.contains("unknown variant"));
+    }
+
+    #[test]
+    fn rejects_disabled_launch_hook_config() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[launch_hooks]
+sync_on_startup = false
+"#,
+        );
+
+        let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("launch_hooks.sync_on_startup"));
     }
 
     #[test]

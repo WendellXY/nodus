@@ -52,6 +52,11 @@ enum Command {
             help = "Select which dependency components to install from the package"
         )]
         component: Vec<DependencyComponent>,
+        #[arg(
+            long = "sync-on-launch",
+            help = "Persist project startup hooks so supported tools run `nodus sync` when they open this repository"
+        )]
+        sync_on_launch: bool,
     },
     #[command(about = "Remove a dependency and prune its managed outputs")]
     Remove {
@@ -120,6 +125,11 @@ enum Command {
             help = "Override and persist the adapter selection for this repository"
         )]
         adapter: Vec<Adapter>,
+        #[arg(
+            long = "sync-on-launch",
+            help = "Persist project startup hooks so supported tools run `nodus sync` when they open this repository"
+        )]
+        sync_on_launch: bool,
     },
     #[command(about = "Validate lockfile, shared store, and managed output consistency")]
     Doctor,
@@ -159,6 +169,7 @@ fn run_command_in_dir(
             tag,
             adapter,
             component,
+            sync_on_launch,
         } => {
             let summary = crate::git::add_dependency_in_dir_with_adapters(
                 cwd,
@@ -167,6 +178,7 @@ fn run_command_in_dir(
                 tag.as_deref(),
                 &adapter,
                 &component,
+                sync_on_launch,
                 reporter,
             )?;
             reporter.finish(format!(
@@ -272,6 +284,7 @@ fn run_command_in_dir(
             locked,
             allow_high_sensitivity,
             adapter,
+            sync_on_launch,
         } => {
             let summary = crate::resolver::sync_in_dir_with_adapters(
                 cwd,
@@ -279,6 +292,7 @@ fn run_command_in_dir(
                 locked,
                 allow_high_sensitivity,
                 &adapter,
+                sync_on_launch,
                 reporter,
             )?;
             reporter.finish(format!(
@@ -535,6 +549,7 @@ mod tests {
         assert!(help.contains("Pin a specific Git tag instead of resolving the latest tag"));
         assert!(help.contains("Select one or more adapters to persist for this repository"));
         assert!(help.contains("Select which dependency components to install from the package"));
+        assert!(help.contains("Persist project startup hooks"));
     }
 
     #[test]
@@ -574,6 +589,23 @@ mod tests {
                 );
             }
             other => panic!("expected add command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_sync_on_launch_flags() {
+        let add =
+            Cli::try_parse_from(["nodus", "add", "example/repo", "--sync-on-launch"]).unwrap();
+        let sync = Cli::try_parse_from(["nodus", "sync", "--sync-on-launch"]).unwrap();
+
+        match add.command {
+            Command::Add { sync_on_launch, .. } => assert!(sync_on_launch),
+            other => panic!("expected add command, got {other:?}"),
+        }
+
+        match sync.command {
+            Command::Sync { sync_on_launch, .. } => assert!(sync_on_launch),
+            other => panic!("expected sync command, got {other:?}"),
         }
     }
 
@@ -660,6 +692,7 @@ version = "0.1.0"
                 tag: None,
                 adapter: vec![Adapter::Codex],
                 component: vec![],
+                sync_on_launch: false,
             },
             temp.path(),
             cache.path(),
@@ -691,6 +724,7 @@ justification = "Run checks."
                 locked: false,
                 allow_high_sensitivity: true,
                 adapter: vec![],
+                sync_on_launch: false,
             },
             temp.path(),
             cache.path(),
@@ -731,6 +765,7 @@ justification = "Run checks."
                 tag: Some("v0.1.0".into()),
                 adapter: vec![Adapter::Codex],
                 component: vec![],
+                sync_on_launch: false,
             },
             temp.path(),
             cache.path(),

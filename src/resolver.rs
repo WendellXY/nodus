@@ -89,6 +89,7 @@ pub fn sync_with_adapters(
     locked: bool,
     allow_high_sensitivity: bool,
     adapters: &[crate::adapters::Adapter],
+    sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
@@ -98,6 +99,7 @@ pub fn sync_with_adapters(
         locked,
         allow_high_sensitivity,
         adapters,
+        sync_on_launch,
         reporter,
     )
 }
@@ -115,6 +117,7 @@ pub fn sync_in_dir(
         locked,
         allow_high_sensitivity,
         &[],
+        false,
         reporter,
     )
 }
@@ -125,6 +128,7 @@ pub fn sync_in_dir_with_adapters(
     locked: bool,
     allow_high_sensitivity: bool,
     adapters: &[Adapter],
+    sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
     let mut root = load_root_from_dir(cwd)?;
@@ -141,6 +145,19 @@ pub fn sync_in_dir_with_adapters(
             );
         }
         root.manifest.set_enabled_adapters(&selection.adapters);
+        reporter.status(
+            "Writing",
+            cwd.join(crate::manifest::MANIFEST_FILE).display(),
+        )?;
+        write_manifest(&cwd.join(crate::manifest::MANIFEST_FILE), &root.manifest)?;
+    }
+    if sync_on_launch {
+        if locked {
+            bail!(
+                "launch hook configuration must be persisted before running `nodus sync --locked`; rerun without `--locked` or set `[launch_hooks] sync_on_startup = true` in nodus.toml"
+            );
+        }
+        root.manifest.set_sync_on_launch(true);
         reporter.status(
             "Writing",
             cwd.join(crate::manifest::MANIFEST_FILE).display(),
@@ -967,6 +984,7 @@ mod tests {
             locked,
             allow_high_sensitivity,
             adapters,
+            false,
             &reporter,
         )
     }
@@ -992,6 +1010,7 @@ mod tests {
             tag,
             adapters,
             components,
+            false,
             &reporter,
         )
     }
@@ -1958,6 +1977,52 @@ shared = { path = "vendor/shared" }
         assert!(!temp.path().join(".codex/skills").exists());
         assert!(!temp.path().join(".claude/skills").exists());
         assert!(!temp.path().join(".opencode/skills").exists());
+    }
+
+    #[test]
+    fn sync_persists_launch_hook_configuration() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_skill(&temp.path().join("skills/review"), "Review");
+
+        let reporter = Reporter::silent();
+        super::sync_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            false,
+            false,
+            &[Adapter::Codex],
+            true,
+            &reporter,
+        )
+        .unwrap();
+
+        let manifest = load_root_from_dir(temp.path()).unwrap();
+        assert!(manifest.manifest.sync_on_launch_enabled());
+    }
+
+    #[test]
+    fn sync_rejects_launch_hook_persistence_with_locked_flag() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_skill(&temp.path().join("skills/review"), "Review");
+        fs::create_dir_all(temp.path().join(".codex")).unwrap();
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+        let reporter = Reporter::silent();
+        let error = super::sync_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            true,
+            false,
+            &[],
+            true,
+            &reporter,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("launch hook configuration"));
     }
 
     #[test]

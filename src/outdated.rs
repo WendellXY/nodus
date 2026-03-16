@@ -319,6 +319,7 @@ mod tests {
             Some("v0.1.0"),
             &[Adapter::Codex],
             &[],
+            false,
             &reporter,
         )
         .unwrap();
@@ -348,6 +349,7 @@ mod tests {
             Some("v0.1.0"),
             &[Adapter::Codex],
             &[],
+            false,
             &reporter,
         )
         .unwrap();
@@ -378,6 +380,7 @@ mod tests {
             None,
             &[Adapter::Codex],
             &[],
+            false,
             &reporter,
         )
         .unwrap();

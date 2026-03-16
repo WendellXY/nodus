@@ -59,10 +59,20 @@ pub fn add_dependency_with_adapters(
     tag: Option<&str>,
     adapters: &[Adapter],
     components: &[DependencyComponent],
+    sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<AddSummary> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    add_dependency_in_dir_with_adapters(&cwd, cache_root, url, tag, adapters, components, reporter)
+    add_dependency_in_dir_with_adapters(
+        &cwd,
+        cache_root,
+        url,
+        tag,
+        adapters,
+        components,
+        sync_on_launch,
+        reporter,
+    )
 }
 
 #[allow(dead_code)]
@@ -82,6 +92,7 @@ pub fn add_dependency_in_dir_with_adapters(
     tag: Option<&str>,
     adapters: &[Adapter],
     components: &[DependencyComponent],
+    sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<AddSummary> {
     let normalized_url = normalize_git_url(url);
@@ -135,11 +146,21 @@ pub fn add_dependency_in_dir_with_adapters(
     if selection.should_persist {
         root.manifest.set_enabled_adapters(&selection.adapters);
     }
+    if sync_on_launch {
+        root.manifest.set_sync_on_launch(true);
+    }
 
     reporter.status("Writing", project_root.join(MANIFEST_FILE).display())?;
     write_manifest(&project_root.join(MANIFEST_FILE), &root.manifest)?;
-    let sync_summary =
-        sync_in_dir_with_adapters(project_root, cache_root, false, false, adapters, reporter)?;
+    let sync_summary = sync_in_dir_with_adapters(
+        project_root,
+        cache_root,
+        false,
+        false,
+        adapters,
+        false,
+        reporter,
+    )?;
 
     Ok(AddSummary {
         alias,
