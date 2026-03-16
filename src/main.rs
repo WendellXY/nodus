@@ -1,4 +1,5 @@
 mod adapters;
+mod cache;
 mod cli;
 mod git;
 mod lockfile;

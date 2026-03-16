@@ -184,12 +184,13 @@ mod tests {
     #[test]
     fn snapshots_package_contents_into_the_local_store() {
         let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
         write_file(
             &temp.path().join("skills/review/SKILL.md"),
             "---\nname: Review\ndescription: Example.\n---\n# Review\n",
         );
 
-        let resolution = resolve_project_for_sync(temp.path()).unwrap();
+        let resolution = resolve_project_for_sync(temp.path(), cache.path()).unwrap();
         let stored = snapshot_resolution(&resolution).unwrap();
 
         assert_eq!(stored.len(), 1);
@@ -204,6 +205,7 @@ mod tests {
     #[test]
     fn recreates_incomplete_snapshots() {
         let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
         write_file(
             &temp.path().join("skills/review/SKILL.md"),
             "---\nname: Review\ndescription: Example.\n---\n# Review\n",
@@ -213,7 +215,7 @@ mod tests {
             "be consistent\n",
         );
 
-        let resolution = resolve_project_for_sync(temp.path()).unwrap();
+        let resolution = resolve_project_for_sync(temp.path(), cache.path()).unwrap();
         let stored = snapshot_resolution(&resolution).unwrap();
         let snapshot_root = &stored[0].snapshot_root;
 

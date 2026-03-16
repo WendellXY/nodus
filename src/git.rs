@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use sha2::{Digest, Sha256};
 
 use crate::manifest::{
     DependencySpec, MANIFEST_FILE, PackageRole, load_dependency_from_dir, load_from_dir,
@@ -20,15 +21,21 @@ pub struct GitCheckout {
     pub rev: String,
 }
 
-pub fn add_dependency(url: &str, tag: Option<&str>) -> Result<()> {
+pub fn add_dependency(cache_root: &Path, url: &str, tag: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    add_dependency_in_dir(&cwd, url, tag)
+    add_dependency_in_dir(&cwd, cache_root, url, tag)
 }
 
-pub fn add_dependency_in_dir(project_root: &Path, url: &str, tag: Option<&str>) -> Result<()> {
+pub fn add_dependency_in_dir(
+    project_root: &Path,
+    cache_root: &Path,
+    url: &str,
+    tag: Option<&str>,
+) -> Result<()> {
     let normalized_url = normalize_git_url(url);
     let alias = normalize_alias_from_url(&normalized_url)?;
-    let checkout = ensure_git_dependency(project_root, &alias, &normalized_url, tag, true)?;
+    let checkout =
+        ensure_git_dependency(project_root, cache_root, &alias, &normalized_url, tag, true)?;
     load_dependency_from_dir(&checkout.path)
         .with_context(|| format!("dependency `{alias}` does not match the Agen package layout"))?;
 
@@ -49,59 +56,40 @@ pub fn add_dependency_in_dir(project_root: &Path, url: &str, tag: Option<&str>) 
     );
 
     write_manifest(&project_root.join(MANIFEST_FILE), &root.manifest)?;
-    sync_in_dir(project_root, false, false)
+    sync_in_dir(project_root, cache_root, false, false)
 }
 
 pub fn ensure_git_dependency(
     project_root: &Path,
+    cache_root: &Path,
     alias: &str,
     url: &str,
     tag: Option<&str>,
     allow_network: bool,
 ) -> Result<GitCheckout> {
     let normalized_url = normalize_git_url(url);
+    let mirror_path = shared_repository_path(cache_root, &normalized_url)?;
+    ensure_shared_repository(&mirror_path, &normalized_url, allow_network)?;
+
     let deps_root = project_root.join(DEPS_ROOT);
     fs::create_dir_all(&deps_root)
         .with_context(|| format!("failed to create {}", deps_root.display()))?;
     let checkout_path = deps_root.join(alias);
 
-    if checkout_path.exists() {
-        let remote_url = git_output(&checkout_path, ["remote", "get-url", "origin"])?;
-        if remote_url.trim() != normalized_url {
-            bail!(
-                "dependency `{alias}` already exists at {} with remote `{}`",
-                checkout_path.display(),
-                remote_url.trim()
-            );
-        }
-        if allow_network {
-            git_run(&checkout_path, ["fetch", "--tags", "origin"])?;
-        }
-    } else {
-        if !allow_network {
-            bail!(
-                "missing git dependency `{alias}` at {}",
-                checkout_path.display()
-            );
-        }
-        git_run(
-            project_root,
-            [
-                "clone",
-                &normalized_url,
-                checkout_path.to_string_lossy().as_ref(),
-            ],
-        )?;
-    }
-
     let resolved_tag = match tag {
         Some(value) => value.to_string(),
-        None => latest_tag(&checkout_path)?,
+        None => latest_tag(&mirror_path)?,
     };
-    let rev = resolve_tag_to_rev(&checkout_path, &resolved_tag)?;
-    if allow_network {
-        git_run(&checkout_path, ["checkout", "--detach", &rev])?;
-    }
+    let rev = resolve_tag_to_rev(&mirror_path, &resolved_tag)?;
+
+    ensure_checkout_worktree(
+        project_root,
+        &checkout_path,
+        &mirror_path,
+        &normalized_url,
+        &rev,
+        allow_network,
+    )?;
 
     Ok(GitCheckout {
         path: checkout_path,
@@ -109,6 +97,14 @@ pub fn ensure_git_dependency(
         tag: resolved_tag,
         rev,
     })
+}
+
+pub fn shared_repository_path(cache_root: &Path, url: &str) -> Result<PathBuf> {
+    let normalized_url = normalize_git_url(url);
+    let repositories_root = cache_root.join("repositories");
+    let repo_name = normalize_repository_name_from_url(&normalized_url)?;
+    let hash = short_hash(&normalized_url);
+    Ok(repositories_root.join(format!("{repo_name}-{hash}.git")))
 }
 
 pub fn current_rev(path: &Path) -> Result<String> {
@@ -182,6 +178,176 @@ pub fn normalize_alias_from_url(url: &str) -> Result<String> {
         bail!("failed to derive a valid dependency alias from `{url}`");
     }
     Ok(alias)
+}
+
+fn normalize_repository_name_from_url(url: &str) -> Result<String> {
+    let normalized = normalize_git_url(url);
+    let trimmed = normalized.trim_end_matches('/').trim_end_matches(".git");
+    let tail = trimmed
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("failed to infer a repository name from `{url}`"))?;
+
+    let mut name = String::new();
+    for character in tail.chars() {
+        if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+            name.push(character);
+        } else if !name.ends_with('_') {
+            name.push('_');
+        }
+    }
+
+    let name = name.trim_matches('_').to_string();
+    if name.is_empty() {
+        bail!("failed to derive a valid repository name from `{url}`");
+    }
+    Ok(name)
+}
+
+fn short_hash(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    format!("{digest:x}")[..8].to_string()
+}
+
+fn ensure_shared_repository(
+    mirror_path: &Path,
+    normalized_url: &str,
+    allow_network: bool,
+) -> Result<()> {
+    if mirror_path.exists() {
+        if !is_bare_repository(mirror_path)? {
+            bail!(
+                "shared repository cache at {} is not a bare git repository",
+                mirror_path.display()
+            );
+        }
+
+        let remote_url = git_output(mirror_path, ["remote", "get-url", "origin"])?;
+        if remote_url.trim() != normalized_url {
+            bail!(
+                "shared repository cache at {} has remote `{}` instead of `{}`",
+                mirror_path.display(),
+                remote_url.trim(),
+                normalized_url
+            );
+        }
+
+        if allow_network {
+            git_run(mirror_path, ["fetch", "--tags", "--prune", "origin"])?;
+        }
+        return Ok(());
+    }
+
+    if !allow_network {
+        bail!(
+            "missing shared repository cache for `{normalized_url}` at {}",
+            mirror_path.display()
+        );
+    }
+
+    let parent = mirror_path.parent().ok_or_else(|| {
+        anyhow!(
+            "cannot determine parent directory for {}",
+            mirror_path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    git_run(
+        parent,
+        [
+            "clone",
+            "--bare",
+            normalized_url,
+            mirror_path.to_string_lossy().as_ref(),
+        ],
+    )
+}
+
+fn ensure_checkout_worktree(
+    project_root: &Path,
+    checkout_path: &Path,
+    mirror_path: &Path,
+    normalized_url: &str,
+    rev: &str,
+    allow_network: bool,
+) -> Result<()> {
+    if checkout_path.exists() {
+        validate_checkout_worktree(checkout_path, mirror_path, normalized_url)?;
+        git_run(checkout_path, ["checkout", "--detach", rev])?;
+        return Ok(());
+    }
+
+    if !allow_network {
+        bail!(
+            "missing git dependency checkout at {}",
+            checkout_path.display()
+        );
+    }
+
+    git_run(
+        mirror_path,
+        [
+            "worktree",
+            "add",
+            "--detach",
+            checkout_path.to_string_lossy().as_ref(),
+            rev,
+        ],
+    )
+    .with_context(|| {
+        format!(
+            "failed to materialize dependency worktree {} from shared cache {} for project {}",
+            checkout_path.display(),
+            mirror_path.display(),
+            project_root.display()
+        )
+    })
+}
+
+pub fn validate_checkout_worktree(
+    checkout_path: &Path,
+    mirror_path: &Path,
+    normalized_url: &str,
+) -> Result<()> {
+    let remote_url = git_output(checkout_path, ["remote", "get-url", "origin"])?;
+    if remote_url.trim() != normalized_url {
+        bail!(
+            "dependency checkout at {} has remote `{}` instead of `{}`",
+            checkout_path.display(),
+            remote_url.trim(),
+            normalized_url
+        );
+    }
+
+    let common_dir = git_output(
+        checkout_path,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let common_dir = PathBuf::from(common_dir.trim());
+    let expected_common_dir = mirror_path
+        .canonicalize()
+        .with_context(|| format!("failed to access shared cache {}", mirror_path.display()))?;
+    let actual_common_dir = common_dir.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve git common dir for dependency checkout {}",
+            checkout_path.display()
+        )
+    })?;
+
+    if actual_common_dir != expected_common_dir {
+        bail!(
+            "dependency checkout at {} is not backed by shared cache {}",
+            checkout_path.display(),
+            mirror_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn is_bare_repository(path: &Path) -> Result<bool> {
+    Ok(git_output(path, ["rev-parse", "--is-bare-repository"])? == "true")
 }
 
 fn git_run<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<()> {
@@ -304,5 +470,20 @@ mod tests {
         }
 
         assert_eq!(latest_tag(temp.path()).unwrap(), "v1.2.0");
+    }
+
+    #[test]
+    fn computes_shared_repository_path_from_the_normalized_url() {
+        let cache_root = TempDir::new().unwrap();
+        let path =
+            shared_repository_path(cache_root.path(), "wenext-limited/playbook-ios").unwrap();
+
+        assert_eq!(
+            path,
+            cache_root
+                .path()
+                .join("repositories")
+                .join("playbook-ios-3fbb5d0f.git")
+        );
     }
 }

@@ -7,7 +7,9 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::adapters::{ManagedFile, build_managed_files};
-use crate::git::{current_rev, ensure_git_dependency};
+use crate::git::{
+    current_rev, ensure_git_dependency, shared_repository_path, validate_checkout_worktree,
+};
 use crate::lockfile::{LOCKFILE_NAME, LockedPackage, LockedSource, Lockfile};
 use crate::manifest::{
     DependencySourceKind, DependencySpec, LoadedManifest, PackageRole, load_dependency_from_dir,
@@ -57,13 +59,25 @@ struct ResolverState {
     resolved_by_path: HashMap<PathBuf, ResolvedPackage>,
 }
 
-pub fn sync(locked: bool, allow_high_sensitivity: bool) -> Result<()> {
-    let cwd = env::current_dir().context("failed to determine the current directory")?;
-    sync_in_dir(&cwd, locked, allow_high_sensitivity)
+#[derive(Debug, Clone, Copy)]
+struct ResolveContext<'a> {
+    project_root: &'a Path,
+    cache_root: &'a Path,
+    mode: ResolveMode,
 }
 
-pub fn sync_in_dir(cwd: &Path, locked: bool, allow_high_sensitivity: bool) -> Result<()> {
-    let resolution = resolve_project(cwd, ResolveMode::Sync)?;
+pub fn sync(cache_root: &Path, locked: bool, allow_high_sensitivity: bool) -> Result<()> {
+    let cwd = env::current_dir().context("failed to determine the current directory")?;
+    sync_in_dir(&cwd, cache_root, locked, allow_high_sensitivity)
+}
+
+pub fn sync_in_dir(
+    cwd: &Path,
+    cache_root: &Path,
+    locked: bool,
+    allow_high_sensitivity: bool,
+) -> Result<()> {
+    let resolution = resolve_project(cwd, cache_root, ResolveMode::Sync)?;
     enforce_capabilities(&resolution, allow_high_sensitivity)?;
     let stored_packages = snapshot_resolution(&resolution)?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
@@ -123,18 +137,18 @@ pub fn sync_in_dir(cwd: &Path, locked: bool, allow_high_sensitivity: bool) -> Re
     Ok(())
 }
 
-pub fn doctor() -> Result<()> {
+pub fn doctor(cache_root: &Path) -> Result<()> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
-    doctor_in_dir(&cwd)
+    doctor_in_dir(&cwd, cache_root)
 }
 
 #[cfg(test)]
-pub fn resolve_project_for_sync(root: &Path) -> Result<Resolution> {
-    resolve_project(root, ResolveMode::Sync)
+pub fn resolve_project_for_sync(root: &Path, cache_root: &Path) -> Result<Resolution> {
+    resolve_project(root, cache_root, ResolveMode::Sync)
 }
 
-pub fn doctor_in_dir(cwd: &Path) -> Result<()> {
-    let resolution = resolve_project(cwd, ResolveMode::Doctor)?;
+pub fn doctor_in_dir(cwd: &Path, cache_root: &Path) -> Result<()> {
+    let resolution = resolve_project(cwd, cache_root, ResolveMode::Doctor)?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
     if !lockfile_path.exists() {
         bail!("missing {}", LOCKFILE_NAME);
@@ -157,7 +171,7 @@ pub fn doctor_in_dir(cwd: &Path) -> Result<()> {
     validate_state_consistency(&owned_paths, &planned_files)?;
 
     for package in &resolution.packages {
-        if let PackageSource::Git { rev, .. } = &package.source {
+        if let PackageSource::Git { url, rev, .. } = &package.source {
             let current = current_rev(&package.root)?;
             if current.trim() != rev {
                 bail!(
@@ -167,6 +181,9 @@ pub fn doctor_in_dir(cwd: &Path) -> Result<()> {
                     rev
                 );
             }
+
+            let mirror_path = shared_repository_path(cache_root, url)?;
+            validate_checkout_worktree(&package.root, &mirror_path, url)?;
         }
     }
 
@@ -177,18 +194,22 @@ pub fn doctor_in_dir(cwd: &Path) -> Result<()> {
     Ok(())
 }
 
-fn resolve_project(root: &Path, mode: ResolveMode) -> Result<Resolution> {
+fn resolve_project(root: &Path, cache_root: &Path, mode: ResolveMode) -> Result<Resolution> {
     let project_root = root
         .canonicalize()
         .with_context(|| format!("failed to access {}", root.display()))?;
+    let context = ResolveContext {
+        project_root: &project_root,
+        cache_root,
+        mode,
+    };
     let mut state = ResolverState::default();
     resolve_package(
-        &project_root,
+        &context,
         "root".to_string(),
         project_root.clone(),
         PackageSource::Root,
         PackageRole::Root,
-        mode,
         &mut state,
     )?;
 
@@ -212,12 +233,11 @@ fn resolve_project(root: &Path, mode: ResolveMode) -> Result<Resolution> {
 }
 
 fn resolve_package(
-    project_root: &Path,
+    context: &ResolveContext<'_>,
     alias: String,
     package_root: PathBuf,
     source: PackageSource,
     role: PackageRole,
-    mode: ResolveMode,
     state: &mut ResolverState,
 ) -> Result<ResolvedPackage> {
     if let Some(existing) = state.resolved_by_path.get(&package_root) {
@@ -247,14 +267,7 @@ fn resolve_package(
         .dependencies
         .iter()
         .map(|(dependency_alias, dependency)| {
-            resolve_dependency(
-                project_root,
-                &manifest,
-                dependency_alias,
-                dependency,
-                mode,
-                state,
-            )
+            resolve_dependency(&manifest, dependency_alias, dependency, context, state)
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -277,11 +290,10 @@ fn resolve_package(
 }
 
 fn resolve_dependency(
-    project_root: &Path,
     parent: &LoadedManifest,
     alias: &str,
     dependency: &DependencySpec,
-    mode: ResolveMode,
+    context: &ResolveContext<'_>,
     state: &mut ResolverState,
 ) -> Result<ResolvedPackage> {
     match dependency.source_kind()? {
@@ -298,12 +310,11 @@ fn resolve_dependency(
                 tag: dependency.tag.clone(),
             };
             resolve_package(
-                project_root,
+                context,
                 alias.to_string(),
                 dependency_root,
                 source,
                 PackageRole::Dependency,
-                mode,
                 state,
             )
         }
@@ -311,11 +322,12 @@ fn resolve_dependency(
             let url = dependency.url.as_deref().unwrap_or_default();
             let tag = dependency.tag.as_deref().unwrap_or_default();
             let checkout = ensure_git_dependency(
-                project_root,
+                context.project_root,
+                context.cache_root,
                 alias,
                 url,
                 Some(tag),
-                mode == ResolveMode::Sync,
+                context.mode == ResolveMode::Sync,
             )?;
             let source = PackageSource::Git {
                 url: checkout.url,
@@ -323,12 +335,11 @@ fn resolve_dependency(
                 rev: checkout.rev,
             };
             resolve_package(
-                project_root,
+                context,
                 alias.to_string(),
                 checkout.path,
                 source,
                 PackageRole::Dependency,
-                mode,
                 state,
             )
         }
@@ -611,7 +622,7 @@ mod tests {
 
     use super::*;
     use crate::adapters::namespaced_skill_id;
-    use crate::git::add_dependency_in_dir;
+    use crate::git::{add_dependency_in_dir, normalize_alias_from_url, shared_repository_path};
     use crate::manifest::{MANIFEST_FILE, load_root_from_dir};
 
     fn write_file(path: &Path, contents: &str) {
@@ -671,9 +682,28 @@ mod tests {
         (repo, url)
     }
 
+    fn cache_dir() -> TempDir {
+        TempDir::new().unwrap()
+    }
+
+    fn git_output(path: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     #[test]
     fn resolves_local_path_dependencies_with_discovery() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         write_skill(&temp.path().join("skills/review"), "Review");
         write_file(
             &temp.path().join(MANIFEST_FILE),
@@ -685,7 +715,7 @@ shared = { path = "vendor/shared" }
 
         write_skill(&temp.path().join("vendor/shared/skills/checks"), "Checks");
 
-        let resolution = resolve_project(temp.path(), ResolveMode::Sync).unwrap();
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
         let planned_files = build_managed_files(
             temp.path(),
             &resolution
@@ -705,11 +735,26 @@ shared = { path = "vendor/shared" }
     #[test]
     fn add_dependency_clones_repo_and_updates_manifest() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         let (_repo, url) = create_git_dependency();
+        let alias = normalize_alias_from_url(&url).unwrap();
 
-        add_dependency_in_dir(temp.path(), &url, Some("v0.1.0")).unwrap();
+        add_dependency_in_dir(temp.path(), cache.path(), &url, Some("v0.1.0")).unwrap();
 
         assert!(temp.path().join(".agen/deps").exists());
+        let mirror_path = shared_repository_path(cache.path(), &url).unwrap();
+        assert!(mirror_path.exists());
+        assert_eq!(
+            git_output(&mirror_path, &["rev-parse", "--is-bare-repository"]),
+            "true"
+        );
+        assert_eq!(
+            git_output(
+                &temp.path().join(format!(".agen/deps/{alias}")),
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            ),
+            mirror_path.canonicalize().unwrap().to_string_lossy()
+        );
         let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
         assert!(manifest.contains("[dependencies]"));
         assert!(manifest.contains("tag = \"v0.1.0\""));
@@ -717,7 +762,7 @@ shared = { path = "vendor/shared" }
         let lockfile = Lockfile::read(&temp.path().join("agentpack.lock")).unwrap();
         assert!(!lockfile.managed_files.is_empty());
 
-        let resolution = resolve_project(temp.path(), ResolveMode::Sync).unwrap();
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
         let dependency = resolution
             .packages
             .iter()
@@ -734,6 +779,7 @@ shared = { path = "vendor/shared" }
     #[test]
     fn add_dependency_uses_latest_tag_when_not_provided() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         let repo = TempDir::new().unwrap();
         write_skill(&repo.path().join("skills/review"), "Review");
         init_git_repo(repo.path());
@@ -751,7 +797,13 @@ shared = { path = "vendor/shared" }
             );
         }
 
-        add_dependency_in_dir(temp.path(), &repo.path().to_string_lossy(), None).unwrap();
+        add_dependency_in_dir(
+            temp.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            None,
+        )
+        .unwrap();
 
         let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
         assert!(manifest.contains("tag = \"v1.2.0\""));
@@ -760,6 +812,7 @@ shared = { path = "vendor/shared" }
     #[test]
     fn add_dependency_rejects_repo_without_supported_directories() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         let repo = TempDir::new().unwrap();
         write_file(&repo.path().join("README.md"), "hello\n");
         init_git_repo(repo.path());
@@ -769,10 +822,14 @@ shared = { path = "vendor/shared" }
             .output()
             .unwrap();
 
-        let error =
-            add_dependency_in_dir(temp.path(), &repo.path().to_string_lossy(), Some("v0.1.0"))
-                .unwrap_err()
-                .to_string();
+        let error = add_dependency_in_dir(
+            temp.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            Some("v0.1.0"),
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(error.contains("does not match the Agen package layout"));
     }
@@ -780,11 +837,12 @@ shared = { path = "vendor/shared" }
     #[test]
     fn sync_writes_runtime_outputs_from_discovered_layout() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         write_skill(&temp.path().join("skills/review"), "Review");
         write_file(&temp.path().join("agents/security.md"), "# Security\n");
         write_file(&temp.path().join("rules/default.rules"), "allow = []\n");
         write_file(&temp.path().join("AGENTS.md"), "user-owned instructions\n");
-        let resolution = resolve_project(temp.path(), ResolveMode::Sync).unwrap();
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
         let root_package = resolution
             .packages
             .iter()
@@ -792,7 +850,7 @@ shared = { path = "vendor/shared" }
             .unwrap();
         let managed_skill_id = namespaced_skill_id(root_package, "review");
 
-        sync_in_dir(temp.path(), false, false).unwrap();
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
 
         assert!(
             temp.path()
@@ -819,6 +877,7 @@ shared = { path = "vendor/shared" }
     #[test]
     fn sync_requires_opt_in_for_high_sensitivity_capabilities() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         write_skill(&temp.path().join("skills/review"), "Review");
         write_file(
             &temp.path().join(MANIFEST_FILE),
@@ -828,7 +887,7 @@ id = "shell.exec"
 sensitivity = "high"
 "#,
         );
-        let resolution = resolve_project(temp.path(), ResolveMode::Sync).unwrap();
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
         let root_package = resolution
             .packages
             .iter()
@@ -836,12 +895,12 @@ sensitivity = "high"
             .unwrap();
         let managed_skill_id = namespaced_skill_id(root_package, "review");
 
-        let error = sync_in_dir(temp.path(), false, false)
+        let error = sync_in_dir(temp.path(), cache.path(), false, false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("--allow-high-sensitivity"));
 
-        sync_in_dir(temp.path(), false, true).unwrap();
+        sync_in_dir(temp.path(), cache.path(), false, true).unwrap();
         assert!(
             temp.path()
                 .join(format!(".claude/skills/{managed_skill_id}/SKILL.md"))
@@ -852,10 +911,11 @@ sensitivity = "high"
     #[test]
     fn sync_uses_short_git_revision_suffix_for_dependency_skills() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         let (_repo, url) = create_git_dependency();
 
-        add_dependency_in_dir(temp.path(), &url, Some("v0.1.0")).unwrap();
-        let resolution = resolve_project(temp.path(), ResolveMode::Sync).unwrap();
+        add_dependency_in_dir(temp.path(), cache.path(), &url, Some("v0.1.0")).unwrap();
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
         let dependency = resolution
             .packages
             .iter()
@@ -863,7 +923,7 @@ sensitivity = "high"
             .unwrap();
         let managed_skill_id = namespaced_skill_id(dependency, "review");
 
-        sync_in_dir(temp.path(), false, false).unwrap();
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
 
         assert!(managed_skill_id.starts_with("review_"));
         assert_eq!(managed_skill_id.len(), "review_".len() + 6);
@@ -877,11 +937,12 @@ sensitivity = "high"
     #[test]
     fn sync_prunes_stale_managed_files() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
 
         write_skill(&temp.path().join("skills/review"), "Review");
         write_file(&temp.path().join("agents/security.md"), "# Security\n");
 
-        sync_in_dir(temp.path(), false, false).unwrap();
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
         assert!(
             temp.path()
                 .join(".opencode/instructions/security.md")
@@ -890,7 +951,7 @@ sensitivity = "high"
 
         fs::remove_file(temp.path().join("agents/security.md")).unwrap();
         fs::remove_dir(temp.path().join("agents")).unwrap();
-        sync_in_dir(temp.path(), false, false).unwrap();
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
 
         assert!(
             !temp
@@ -903,13 +964,67 @@ sensitivity = "high"
     #[test]
     fn doctor_detects_lockfile_drift() {
         let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
         write_skill(&temp.path().join("skills/review"), "Review");
-        sync_in_dir(temp.path(), false, false).unwrap();
+        sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
 
         write_skill(&temp.path().join("skills/renamed"), "Renamed");
 
-        let error = doctor_in_dir(temp.path()).unwrap_err().to_string();
+        let error = doctor_in_dir(temp.path(), cache.path())
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("out of date"));
+    }
+
+    #[test]
+    fn shared_cache_is_reused_across_multiple_projects() {
+        let cache = cache_dir();
+        let project_one = TempDir::new().unwrap();
+        let project_two = TempDir::new().unwrap();
+        let (_repo, url) = create_git_dependency();
+        let alias = normalize_alias_from_url(&url).unwrap();
+
+        add_dependency_in_dir(project_one.path(), cache.path(), &url, Some("v0.1.0")).unwrap();
+        add_dependency_in_dir(project_two.path(), cache.path(), &url, Some("v0.1.0")).unwrap();
+
+        let mirror_path = shared_repository_path(cache.path(), &url).unwrap();
+        assert!(mirror_path.exists());
+        assert_eq!(
+            git_output(
+                &project_one.path().join(format!(".agen/deps/{alias}")),
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            ),
+            mirror_path.canonicalize().unwrap().to_string_lossy()
+        );
+        assert_eq!(
+            git_output(
+                &project_two.path().join(format!(".agen/deps/{alias}")),
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            ),
+            mirror_path.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn custom_cache_root_routes_shared_repositories_into_the_override_directory() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        let (_repo, url) = create_git_dependency();
+
+        add_dependency_in_dir(temp.path(), cache.path(), &url, Some("v0.1.0")).unwrap();
+
+        assert!(shared_repository_path(cache.path(), &url).unwrap().exists());
+    }
+
+    #[test]
+    fn doctor_accepts_shared_mirror_backed_worktrees() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        let (_repo, url) = create_git_dependency();
+
+        add_dependency_in_dir(temp.path(), cache.path(), &url, Some("v0.1.0")).unwrap();
+
+        doctor_in_dir(temp.path(), cache.path()).unwrap();
     }
 
     #[test]
