@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::lockfile::{LOCKFILE_NAME, LockedPackage, LockedSource, Lockfile};
 use crate::manifest::{DependencySpec, LoadedManifest, load_from_dir};
+use crate::store::snapshot_resolution;
 
 #[derive(Debug, Clone)]
 pub struct Resolution {
@@ -40,6 +41,7 @@ struct ResolverState {
 pub fn sync(locked: bool, _allow_high_sensitivity: bool) -> Result<()> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
     let resolution = resolve_project(&cwd)?;
+    let _stored_packages = snapshot_resolution(&resolution)?;
     let lockfile = resolution.to_lockfile()?;
     let lockfile_path = cwd.join(LOCKFILE_NAME);
 

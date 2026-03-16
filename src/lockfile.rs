@@ -6,6 +6,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::Capability;
+use crate::store::write_atomic;
 
 pub const LOCKFILE_NAME: &str = "agentpack.lock";
 const LOCKFILE_VERSION: u32 = 1;
@@ -63,7 +64,7 @@ impl Lockfile {
 
     pub fn write(&self, path: &Path) -> Result<()> {
         let contents = toml::to_string_pretty(self).context("failed to serialize lockfile")?;
-        fs::write(path, contents)
+        write_atomic(path, contents.as_bytes())
             .with_context(|| format!("failed to write lockfile {}", path.display()))
     }
 }
