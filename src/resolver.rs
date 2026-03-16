@@ -81,6 +81,7 @@ struct ResolveContext<'a> {
     reporter: &'a Reporter,
 }
 
+#[allow(dead_code)]
 pub fn sync_with_adapters(
     cache_root: &Path,
     locked: bool,
@@ -224,6 +225,7 @@ pub fn sync_in_dir_with_adapters(
     })
 }
 
+#[allow(dead_code)]
 pub fn doctor(cache_root: &Path, reporter: &Reporter) -> Result<DoctorSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
     doctor_in_dir(&cwd, cache_root, reporter)

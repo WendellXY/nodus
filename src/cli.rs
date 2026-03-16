@@ -61,12 +61,22 @@ pub fn run() -> ExitCode {
 }
 
 fn run_command(cli: Cli, reporter: &Reporter) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir()?;
     let cache_root = crate::cache::resolve_cache_root(cli.cache_path.as_deref())?;
+    run_command_in_dir(cli.command, &cwd, &cache_root, reporter)
+}
 
-    match cli.command {
+fn run_command_in_dir(
+    command: Command,
+    cwd: &std::path::Path,
+    cache_root: &std::path::Path,
+    reporter: &Reporter,
+) -> anyhow::Result<()> {
+    match command {
         Command::Add { url, tag, adapter } => {
-            let summary = crate::git::add_dependency_with_adapters(
-                &cache_root,
+            let summary = crate::git::add_dependency_in_dir_with_adapters(
+                cwd,
+                cache_root,
                 &url,
                 tag.as_deref(),
                 &adapter,
@@ -82,7 +92,8 @@ fn run_command(cli: Cli, reporter: &Reporter) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Remove { package } => {
-            let summary = crate::git::remove_dependency(&cache_root, &package, reporter)?;
+            let summary =
+                crate::git::remove_dependency_in_dir(cwd, cache_root, &package, reporter)?;
             reporter.finish(format!(
                 "removed {} and wrote {} managed files",
                 summary.alias, summary.managed_file_count,
@@ -90,7 +101,7 @@ fn run_command(cli: Cli, reporter: &Reporter) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Init => {
-            let summary = crate::manifest::scaffold_init(reporter)?;
+            let summary = crate::manifest::scaffold_init_in_dir(cwd, reporter)?;
             reporter.finish(format!(
                 "created {}",
                 summary
@@ -107,8 +118,9 @@ fn run_command(cli: Cli, reporter: &Reporter) -> anyhow::Result<()> {
             allow_high_sensitivity,
             adapter,
         } => {
-            let summary = crate::resolver::sync_with_adapters(
-                &cache_root,
+            let summary = crate::resolver::sync_in_dir_with_adapters(
+                cwd,
+                cache_root,
                 locked,
                 allow_high_sensitivity,
                 &adapter,
@@ -123,7 +135,7 @@ fn run_command(cli: Cli, reporter: &Reporter) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Doctor => {
-            let summary = crate::resolver::doctor(&cache_root, reporter)?;
+            let summary = crate::resolver::doctor_in_dir(cwd, cache_root, reporter)?;
             reporter.finish(format!(
                 "project state is consistent across {} packages",
                 summary.package_count,
@@ -143,8 +155,103 @@ fn format_adapters(adapters: &[Adapter]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command};
+    use std::fs;
+    use std::io::{self, Write};
+    use std::path::Path;
+    use std::process::Command as ProcessCommand;
+    use std::sync::{Arc, Mutex};
+
+    use super::{Cli, Command, run_command_in_dir};
     use clap::Parser;
+    use tempfile::TempDir;
+
+    use crate::adapters::Adapter;
+    use crate::report::{ColorMode, Reporter};
+    use crate::resolver;
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn write_file(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    fn write_skill(path: &Path, name: &str) {
+        write_file(
+            &path.join("SKILL.md"),
+            &format!("---\nname: {name}\ndescription: Example skill.\n---\n# {name}\n"),
+        );
+    }
+
+    fn init_git_repo(path: &Path) {
+        let run = |args: &[&str]| {
+            let output = ProcessCommand::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run(&["init"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test User"]);
+        run(&["add", "."]);
+        run(&["commit", "-m", "initial"]);
+    }
+
+    fn create_git_dependency() -> (TempDir, String) {
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+
+        let output = ProcessCommand::new("git")
+            .args(["tag", "v0.1.0"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let url = repo.path().to_string_lossy().to_string();
+        (repo, url)
+    }
+
+    fn run_command_output(command: Command, cwd: &Path, cache_root: &Path) -> String {
+        let buffer = SharedBuffer::default();
+        let reporter = Reporter::sink(ColorMode::Never, buffer.clone());
+
+        run_command_in_dir(command, cwd, cache_root, &reporter).unwrap();
+
+        buffer.contents()
+    }
 
     #[test]
     fn parses_remove_subcommand() {
@@ -192,5 +299,88 @@ mod tests {
         let cli = Cli::try_parse_from(["nodus", "--color", "never", "doctor"]).unwrap();
 
         assert_eq!(cli.color, super::ColorMode::Never);
+    }
+
+    #[test]
+    fn init_command_emits_creating_and_finished_lines() {
+        let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+
+        let output = run_command_output(Command::Init, temp.path(), cache.path());
+
+        assert!(output.contains("Creating"));
+        assert!(output.contains("nodus.toml"));
+        assert!(output.contains("skills/example/SKILL.md"));
+        assert!(output.contains("Finished"));
+    }
+
+    #[test]
+    fn add_command_emits_resolving_and_adding_lines() {
+        let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let (_repo, url) = create_git_dependency();
+
+        let output = run_command_output(
+            Command::Add {
+                url,
+                tag: None,
+                adapter: vec![Adapter::Codex],
+            },
+            temp.path(),
+            cache.path(),
+        );
+
+        assert!(output.contains("Resolving"));
+        assert!(output.contains("latest tag"));
+        assert!(output.contains("Adding"));
+        assert!(output.contains("Finished"));
+    }
+
+    #[test]
+    fn sync_command_emits_statuses_and_notes() {
+        let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".codex")).unwrap();
+        write_file(
+            &temp.path().join("nodus.toml"),
+            r#"
+[[capabilities]]
+id = "shell.exec"
+sensitivity = "high"
+justification = "Run checks."
+"#,
+        );
+
+        let output = run_command_output(
+            Command::Sync {
+                locked: false,
+                allow_high_sensitivity: true,
+                adapter: vec![],
+            },
+            temp.path(),
+            cache.path(),
+        );
+
+        assert!(output.contains("Resolving"));
+        assert!(output.contains("Checking"));
+        assert!(output.contains("Snapshotting"));
+        assert!(output.contains("note: capability root shell.exec (high)"));
+        assert!(output.contains("Finished"));
+    }
+
+    #[test]
+    fn doctor_command_emits_checking_and_finished_lines() {
+        let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".codex")).unwrap();
+
+        let reporter = Reporter::silent();
+        resolver::sync_in_dir(temp.path(), cache.path(), false, false, &reporter).unwrap();
+
+        let output = run_command_output(Command::Doctor, temp.path(), cache.path());
+
+        assert!(output.contains("Checking"));
+        assert!(output.contains("Finished"));
+        assert!(output.contains("project state is consistent"));
     }
 }

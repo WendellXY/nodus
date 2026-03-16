@@ -115,6 +115,7 @@ struct SkillFrontmatter {
     description: String,
 }
 
+#[allow(dead_code)]
 pub fn scaffold_init(reporter: &Reporter) -> Result<InitSummary> {
     let cwd = env::current_dir().context("failed to determine the current directory")?;
     scaffold_init_in_dir(&cwd, reporter)

@@ -36,6 +36,7 @@ pub struct RemoveSummary {
     pub managed_file_count: usize,
 }
 
+#[allow(dead_code)]
 pub fn add_dependency_with_adapters(
     cache_root: &Path,
     url: &str,
@@ -47,6 +48,7 @@ pub fn add_dependency_with_adapters(
     add_dependency_in_dir_with_adapters(&cwd, cache_root, url, tag, adapters, reporter)
 }
 
+#[allow(dead_code)]
 pub fn remove_dependency(
     cache_root: &Path,
     package: &str,
