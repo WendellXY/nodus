@@ -88,6 +88,32 @@ pub fn rule_file(
     )
 }
 
+pub fn sync_on_startup_files(project_root: &Path) -> Vec<ManagedFile> {
+    vec![
+        ManagedFile {
+            path: project_root.join(".opencode/scripts/nodus-sync.sh"),
+            contents: sync_script_contents(),
+        },
+        ManagedFile {
+            path: project_root.join(".opencode/plugins/nodus-sync.js"),
+            contents:
+                br#"export default async function nodusSyncPlugin({ $, directory, worktree }) {
+  const root = worktree ?? directory;
+
+  try {
+    await $`sh ${`${root}/.opencode/scripts/nodus-sync.sh`}`;
+  } catch (error) {
+    console.error("nodus sync hook failed", error);
+  }
+
+  return {};
+}
+"#
+                .to_vec(),
+        },
+    ]
+}
+
 fn copy_file(target_path: impl AsRef<Path>, source_path: impl AsRef<Path>) -> Result<ManagedFile> {
     let target_path = target_path.as_ref();
     let source_path = source_path.as_ref();
@@ -133,6 +159,25 @@ fn rewrite_skill_name(contents: &[u8], skill_id: &str) -> Result<Vec<u8>> {
         rewritten.push('\n');
     }
     Ok(rewritten.into_bytes())
+}
+
+fn sync_script_contents() -> Vec<u8> {
+    br#"#!/bin/sh
+set -eu
+
+project_root="${1:-$(pwd)}"
+
+if ! command -v nodus >/dev/null 2>&1; then
+  echo "nodus not found on PATH; skipping startup sync" >&2
+  exit 0
+fi
+
+cd "$project_root"
+if ! nodus sync >/dev/null 2>&1; then
+  echo "nodus sync failed in $project_root" >&2
+fi
+"#
+    .to_vec()
 }
 
 #[cfg(test)]

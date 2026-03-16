@@ -485,6 +485,21 @@ pub fn build_output_plan(
         }
     }
 
+    if packages
+        .iter()
+        .any(|(package, _)| matches!(package.source, PackageSource::Root))
+        && packages.iter().any(|(package, _)| {
+            matches!(package.source, PackageSource::Root)
+                && package.manifest.manifest.sync_on_launch_enabled()
+        })
+    {
+        for file in sync_on_startup_files(project_root, selected_adapters, &mut plan.warnings)? {
+            plan.managed_files
+                .insert(display_relative(project_root, &file.path));
+            merge_file(&mut plan.files, file)?;
+        }
+    }
+
     for file in gitignore_files(project_root, &plan.files)? {
         plan.managed_files
             .insert(display_relative(project_root, &file.path));
@@ -595,6 +610,38 @@ fn render_gitignore(patterns: &BTreeSet<String>) -> String {
         output.push('\n');
     }
     output
+}
+
+fn sync_on_startup_files(
+    project_root: &Path,
+    selected_adapters: Adapters,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<ManagedFile>> {
+    let mut files = Vec::new();
+
+    if selected_adapters.contains(Adapter::Claude) {
+        files.extend(claude::sync_on_startup_files(project_root));
+    }
+    if selected_adapters.contains(Adapter::OpenCode) {
+        files.extend(opencode::sync_on_startup_files(project_root));
+    }
+    if selected_adapters.contains(Adapter::Agents) {
+        warnings.push(
+            "launch sync is not emitted for `agents`; no documented project startup hook surface is available".into(),
+        );
+    }
+    if selected_adapters.contains(Adapter::Codex) {
+        warnings.push(
+            "launch sync is not emitted for `codex`; project config is supported, but no documented startup hook is available".into(),
+        );
+    }
+    if selected_adapters.contains(Adapter::Cursor) {
+        warnings.push(
+            "launch sync is not emitted for `cursor`; project hooks exist, but no documented auto-start hook is available for repo-local config".into(),
+        );
+    }
+
+    Ok(files)
 }
 
 fn display_relative(project_root: &Path, path: &Path) -> String {

@@ -63,6 +63,35 @@ pub fn rule_file(
     )
 }
 
+pub fn sync_on_startup_files(project_root: &Path) -> Vec<ManagedFile> {
+    vec![
+        ManagedFile {
+            path: project_root.join(".claude/hooks/nodus-sync.sh"),
+            contents: sync_script_contents("CLAUDE_PROJECT_DIR"),
+        },
+        ManagedFile {
+            path: project_root.join(".claude/settings.local.json"),
+            contents: br#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/hooks/nodus-sync.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#
+            .to_vec(),
+        },
+    ]
+}
+
 fn copy_directory(
     target_root: impl AsRef<Path>,
     source_root: impl AsRef<Path>,
@@ -99,4 +128,25 @@ fn copy_file(target_path: impl AsRef<Path>, source_path: impl AsRef<Path>) -> Re
         contents: fs::read(source_path)
             .with_context(|| format!("failed to read snapshot file {}", source_path.display()))?,
     })
+}
+
+fn sync_script_contents(project_dir_env: &str) -> Vec<u8> {
+    format!(
+        r#"#!/bin/sh
+set -eu
+
+project_root="${{{project_dir_env}:-$(pwd)}}"
+
+if ! command -v nodus >/dev/null 2>&1; then
+  echo "nodus not found on PATH; skipping startup sync" >&2
+  exit 0
+fi
+
+cd "$project_root"
+if ! nodus sync >/dev/null 2>&1; then
+  echo "nodus sync failed in $project_root" >&2
+fi
+"#
+    )
+    .into_bytes()
 }
