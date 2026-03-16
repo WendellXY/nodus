@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  English • <a href="./README.cn.md">简体中文</a>
+</p>
+
+<p align="center">
   <a href="#install">Install</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#commands">Commands</a> •

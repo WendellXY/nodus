@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  <a href="./README.md">English</a> • 简体中文
+</p>
+
+<p align="center">
   <a href="#install">安装</a> •
   <a href="#quick-start">快速开始</a> •
   <a href="#commands">命令</a> •
