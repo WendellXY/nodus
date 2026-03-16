@@ -1,63 +1,44 @@
-# Nodus
+<p align="center">
+  <img src="./assets/nodus-mark.svg" alt="Nodus mark" width="144">
+</p>
 
-Nodus is a local-first Rust CLI for adding project-scoped agent packages to your repo without layout drift.
+<h1 align="center">Nodus</h1>
 
-Add a package from Git or a local path, pin the tag you want, lock the exact resolved revision in `nodus.lock`, snapshot the result into a shared store, and emit managed runtime files for Claude, Codex, and OpenCode.
+<p align="center"><strong>Add agent packages to your repo with one command.</strong></p>
 
-If you want package installation to feel reproducible instead of hand-tuned, Nodus is built for that.
+<p align="center">
+  Resolve from Git tags or local paths, lock exact revisions, snapshot package contents,
+  and emit managed runtime files for Claude, Codex, and OpenCode.
+</p>
 
-## Highlights
+<p align="center">
+  <a href="#install">Install</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#commands">Commands</a> •
+  <a href="#manifest">Manifest</a> •
+  <a href="./CONTRIBUTING.md">Contributing</a>
+</p>
 
-- Add packages in one command: `nodus add` records the dependency, resolves the tag, persists adapter selection when needed, and runs sync immediately
-- Deterministic installs: lock exact revisions, snapshot package content, and regenerate managed outputs from stable state
-- One dependency, multiple runtimes: install once and emit only the adapter outputs your repo actually uses
-- Safe file ownership: Nodus tracks what it wrote, prunes stale generated files, and refuses to overwrite unmanaged files
-- Shared local store: reuse mirrors, checkouts, and content-addressed snapshots across projects instead of refetching everything per repo
-- Explicit safety gates: packages that declare `high` sensitivity capabilities require an intentional opt-in before sync completes
-- CI-friendly by design: `nodus sync --locked` and `nodus doctor` make it straightforward to verify that a repo matches its expected state
+## What Is Nodus?
 
-## Why Nodus
+Nodus is for the repo that wants to consume agent packages without stitching runtime folders together by hand.
 
-Adding an agent package should not mean copying files around by hand, guessing which runtime folders to touch, or wondering whether everyone on the team resolved the same revision.
+Point it at a GitHub repo or local path and Nodus will resolve the package, pin the dependency, lock the exact revision in `nodus.lock`, snapshot the package into a shared local store, and write only the managed files your selected adapters need.
 
-Nodus gives package consumers one sync flow:
+```bash
+nodus add obra/superpowers --adapter codex
+nodus doctor
+```
 
-- Add a dependency from Git or a local path
-- Pin direct dependencies by tag in `nodus.toml`
-- Lock exact Git revisions and managed outputs in `nodus.lock`
-- Reuse a shared store of repository mirrors, checkouts, and content-addressed snapshots across projects
-- Emit only the runtime outputs your repo actually needs
-- Protect unmanaged files from accidental overwrite
-- Gate high-sensitivity packages behind explicit opt-in
+The install flow is designed to stay predictable:
 
-Package authors still publish content from conventional folders such as `skills/`, `agents/`, `rules/`, and `commands/`, but as a consumer you mostly interact with `nodus add`, `nodus sync`, and `nodus doctor`.
+- `nodus add` records the dependency and runs sync immediately
+- `nodus.lock` captures the exact Git revision and managed outputs
+- managed files are pruned when they go stale
+- unmanaged files are never overwritten
+- high-sensitivity packages require explicit opt-in
 
-## How It Works
-
-1. Initialize or open a repo that should consume agent packages.
-2. Run `nodus add <package>` from a Git tag or local path.
-3. Nodus resolves dependencies, locks exact state, snapshots package content, and writes runtime-specific files into managed directories such as `.codex/` or `.claude/`.
-
-That means you get a pinned dependency, reproducible generated outputs, and a repo that can prove what was installed.
-
-## Available Today
-
-Nodus currently supports:
-
-- Local path dependencies
-- Git dependencies resolved from tags
-- Deterministic sync with lock state stored in `nodus.lock`
-- Managed output emission for Claude, Codex, and OpenCode
-- Repo-level adapter selection that can be inferred, chosen explicitly, or persisted
-- Validation of shared store state, lockfile state, and managed files with `nodus doctor`
-
-Planned later:
-
-- Remote registries
-- Package publishing workflows
-- Signature or provenance verification
-- Global install scopes
-- Claude plugin mode
+Package authors can still publish content from `skills/`, `agents/`, `rules/`, and `commands/`, but as a consumer you mostly interact with `nodus add`, `nodus sync`, and `nodus doctor`.
 
 ## Install
 
@@ -119,58 +100,42 @@ You can override that location for any command with `--store-path <path>`.
 
 ## Quick Start
 
-Initialize a repo that will consume agent packages:
+If the repo does not have a manifest yet:
 
 ```bash
 nodus init
 ```
 
-That creates:
-
-- `nodus.toml`
-- `skills/example/SKILL.md`
-
-Add a dependency from Git:
+Then add a package:
 
 ```bash
 nodus add obra/superpowers --adapter codex
 ```
 
-That command:
+That one command:
 
 - resolves the latest tag unless you pass `--tag`
-- records the dependency in `nodus.toml`
+- writes the dependency to `nodus.toml`
 - persists adapter selection when needed
-- runs a normal sync immediately
+- locks exact state in `nodus.lock`
+- emits managed files under the selected runtime root
 
-Check the generated state back into your repo workflow:
+Validate the result:
 
 ```bash
 nodus doctor
 ```
 
-Or resync dependencies into managed runtime outputs at any time:
-
-```bash
-nodus sync
-```
-
-For reproducible CI:
+For repeatable CI:
 
 ```bash
 nodus sync --locked
 ```
 
-If the root project declares any `high` sensitivity capabilities, opt in explicitly:
+When a package declares `high` sensitivity capabilities:
 
 ```bash
 nodus sync --allow-high-sensitivity
-```
-
-Remove a configured dependency and prune its managed outputs:
-
-```bash
-nodus remove superpowers
 ```
 
 Use a custom shared store root when needed:
@@ -179,15 +144,40 @@ Use a custom shared store root when needed:
 nodus --store-path /tmp/nodus-store sync
 ```
 
-Typical flow in practice:
+Remove a configured dependency and prune its managed outputs:
 
 ```bash
-nodus init
-nodus add obra/superpowers --adapter codex
-nodus doctor
+nodus remove superpowers
 ```
 
-After that, your repo has a pinned dependency in `nodus.toml`, exact resolved state in `nodus.lock`, and managed runtime files under the adapter root you selected.
+After setup, your repo has a pinned dependency in `nodus.toml`, exact resolved state in `nodus.lock`, and managed runtime files under the adapter root you selected.
+
+## Why Teams Use Nodus
+
+- Add a package from Git or a local path without manually copying files into `.codex/`, `.claude/`, or `.opencode/`
+- Install once and emit only the runtime outputs your repo actually uses
+- Reuse shared mirrors, checkouts, and content-addressed snapshots across projects
+- Keep generated files under explicit ownership so stale outputs can be pruned safely
+- Verify install state with `nodus doctor` and enforce it in CI with `nodus sync --locked`
+
+## Available Today
+
+Nodus currently supports:
+
+- Local path dependencies
+- Git dependencies resolved from tags
+- Deterministic sync with lock state stored in `nodus.lock`
+- Managed output emission for Claude, Codex, and OpenCode
+- Repo-level adapter selection that can be inferred, chosen explicitly, or persisted
+- Validation of shared store state, lockfile state, and managed files with `nodus doctor`
+
+Planned later:
+
+- Remote registries
+- Package publishing workflows
+- Signature or provenance verification
+- Global install scopes
+- Claude plugin mode
 
 ## Contributing
 
