@@ -56,7 +56,6 @@ pub struct Adapters(u8);
 impl Adapters {
     #[allow(dead_code)]
     pub const NONE: Self = Self(0);
-    pub const ALL: Self = Self(Self::CLAUDE.0 | Self::CODEX.0 | Self::OPENCODE.0);
     pub const CLAUDE: Self = Self(Adapter::Claude.bit());
     pub const CODEX: Self = Self(Adapter::Codex.bit());
     pub const OPENCODE: Self = Self(Adapter::OpenCode.bit());

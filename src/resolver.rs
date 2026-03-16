@@ -803,7 +803,9 @@ shared = { path = "vendor/shared" }
         write_skill(&temp.path().join("vendor/shared/skills/checks"), "Checks");
 
         let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
-        let lockfile = resolution.to_lockfile(Adapters::ALL).unwrap();
+        let lockfile = resolution
+            .to_lockfile(Adapters::from_slice(&Adapter::ALL))
+            .unwrap();
 
         assert_eq!(lockfile.packages.len(), 2);
         assert_eq!(lockfile.packages[0].alias, "root");
