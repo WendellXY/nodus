@@ -1767,6 +1767,16 @@ target = ".github/prompts/review.md"
             &remote_repo,
             &[Adapter::Claude],
         );
+        let loaded = crate::manifest::load_root_from_dir(project.path()).unwrap();
+        let dependency = loaded.manifest.dependencies.get("playbook_ios").unwrap();
+        let source_spec = if let Some(github) = &dependency.github {
+            format!("github = {:?}", github)
+        } else if let Some(url) = &dependency.url {
+            format!("url = {:?}", url)
+        } else {
+            panic!("expected git dependency source");
+        };
+        let tag = dependency.tag.as_deref().unwrap_or("v0.1.0");
 
         relay_dependency_in_dir(
             project.path(),
@@ -1786,10 +1796,10 @@ target = ".github/prompts/review.md"
 enabled = ["claude", "codex"]
 
 [dependencies.playbook_ios]
-url = "{}"
-tag = "v0.1.0"
+{source_spec}
+tag = {:?}
 "#,
-                toml_path_value(&remote_repo)
+                tag
             ),
         );
 
