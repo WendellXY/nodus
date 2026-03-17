@@ -17,6 +17,7 @@ use crate::manifest::{
     DependencyComponent, DependencySourceKind, DependencySpec, LoadedManifest, PackageRole,
     RequestedGitRef, load_dependency_from_dir, load_root_from_dir, write_manifest,
 };
+use crate::paths::display_path;
 use crate::report::Reporter;
 use crate::selection::{resolve_adapter_selection, should_prompt_for_adapter};
 use crate::store::{snapshot_resolution, write_atomic};
@@ -1162,14 +1163,6 @@ impl ResolvedPackage {
     }
 }
 
-fn display_path(path: &Path) -> String {
-    if path.as_os_str().is_empty() {
-        ".".into()
-    } else {
-        path.to_string_lossy().replace('\\', "/")
-    }
-}
-
 fn enforce_capabilities(
     resolution: &Resolution,
     allow_high_sensitivity: bool,
@@ -1695,7 +1688,7 @@ mod tests {
     }
 
     fn toml_path_value(path: &Path) -> String {
-        path.to_string_lossy().replace('\\', "/")
+        display_path(path)
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::manifest::{
     DependencyComponent, DependencySourceKind, DependencySpec, LoadedManifest,
     load_dependency_from_dir, load_root_from_dir, normalize_dependency_alias,
 };
+use crate::paths::display_path;
 use crate::report::Reporter;
 
 #[derive(Debug, Clone)]
@@ -723,14 +724,6 @@ fn render_items(items: &[String]) -> String {
 
 fn short_rev(rev: &str) -> String {
     rev.chars().take(12).collect()
-}
-
-fn display_path(path: &Path) -> String {
-    if path.as_os_str().is_empty() {
-        ".".into()
-    } else {
-        path.to_string_lossy().replace('\\', "/")
-    }
 }
 
 fn paint_label(reporter: &Reporter, label: &str) -> String {

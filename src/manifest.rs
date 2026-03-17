@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use toml::Table;
 
 use crate::adapters::Adapter;
+use crate::paths::display_path;
 use crate::report::Reporter;
 
 pub const MANIFEST_FILE: &str = "nodus.toml";
@@ -1217,10 +1218,6 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
 
 fn default_manifest_contents() -> &'static str {
     ""
-}
-
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }
 
 fn quote(value: &str) -> String {

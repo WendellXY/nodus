@@ -7,6 +7,7 @@ mod local_config;
 mod lockfile;
 mod manifest;
 mod outdated;
+mod paths;
 mod relay;
 mod report;
 mod resolver;

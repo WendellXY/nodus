@@ -995,7 +995,7 @@ mod tests {
     }
 
     fn toml_path_value(path: &Path) -> String {
-        path.to_string_lossy().replace('\\', "/")
+        crate::paths::display_path(path)
     }
 
     fn create_remote_dependency() -> (TempDir, PathBuf) {

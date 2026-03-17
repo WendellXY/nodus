@@ -26,6 +26,8 @@ tempfile = "3.23.0"
 thiserror = "2.0.17"
 toml = "1.0.6"
 walkdir = "2.5.0"
+path-slash = "0.2.1"
+dunce = "1.0.5"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 async-trait = "0.1.89"

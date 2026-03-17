@@ -7,6 +7,7 @@ use rayon::prelude::*;
 use crate::git::{ensure_git_dependency, latest_tag, prepare_repository_mirror};
 use crate::lockfile::Lockfile;
 use crate::manifest::{DependencySourceKind, DependencySpec, RequestedGitRef, load_root_from_dir};
+use crate::paths::display_path;
 use crate::report::Reporter;
 
 #[derive(Debug, Clone)]
@@ -327,14 +328,6 @@ fn locked_rev(lockfile: Option<&Lockfile>, alias: &str) -> Option<String> {
 
 fn short_rev(rev: &str) -> String {
     rev.chars().take(12).collect()
-}
-
-fn display_path(path: &Path) -> String {
-    if path.as_os_str().is_empty() {
-        ".".into()
-    } else {
-        path.to_string_lossy().replace('\\', "/")
-    }
 }
 
 #[cfg(test)]

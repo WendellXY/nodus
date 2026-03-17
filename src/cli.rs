@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 use crate::adapters::Adapter;
 use crate::manifest::{DependencyComponent, RequestedGitRef};
+use crate::paths::display_path;
 use crate::report::Reporter;
 use crate::review::ReviewProvider;
 
@@ -415,14 +416,6 @@ fn requested_git_ref<'a>(
         _ => anyhow::bail!(
             "git dependency must not declare more than one of `tag`, `branch`, or `revision`"
         ),
-    }
-}
-
-fn display_path(path: &std::path::Path) -> String {
-    if path.as_os_str().is_empty() {
-        ".".into()
-    } else {
-        path.to_string_lossy().replace('\\', "/")
     }
 }
 

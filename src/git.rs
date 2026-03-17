@@ -479,7 +479,7 @@ fn normalize_repository_name_from_url(url: &str) -> Result<String> {
 fn canonical_local_git_path(url: &str) -> Option<PathBuf> {
     looks_like_local_path(url)
         .then(|| PathBuf::from(url))
-        .and_then(|path| path.canonicalize().ok())
+        .and_then(|path| dunce::canonicalize(path).ok())
 }
 
 fn looks_like_local_path(value: &str) -> bool {

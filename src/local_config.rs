@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::paths::display_path;
 use crate::store::write_atomic;
 
 const LOCAL_DIR: &str = ".nodus";
@@ -113,10 +114,6 @@ where
     String::deserialize(deserializer).map(PathBuf::from)
 }
 
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -160,10 +157,12 @@ mod tests {
         };
 
         let encoded = toml::to_string_pretty(&config).unwrap();
+        let decoded: toml::Value = toml::from_str(&encoded).unwrap();
+        let expected = display_path(&config.relay["playbook_ios"].repo_path);
 
-        assert!(
-            encoded
-                .contains("repo_path = \"C:/Users/runneradmin/AppData/Local/Temp/playbook-ios\"")
+        assert_eq!(
+            decoded["relay"]["playbook_ios"]["repo_path"].as_str(),
+            Some(expected.as_str())
         );
     }
 }
