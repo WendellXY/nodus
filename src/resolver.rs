@@ -666,12 +666,9 @@ fn resolve_dependency(
         }
         DependencySourceKind::Git => {
             let url = dependency.resolved_git_url()?;
-            let (tag, branch) = match dependency.requested_git_ref()? {
-                RequestedGitRef::Tag(tag) => (Some(tag), None),
-                RequestedGitRef::Branch(branch) => (None, Some(branch)),
-            };
+            let requested_ref = dependency.requested_git_ref()?;
             let checkout = if let Some(lockfile) = context.frozen_lockfile {
-                let locked = locked_git_source(lockfile, alias, &url, tag, branch)?;
+                let locked = locked_git_source(lockfile, alias, &url, requested_ref)?;
                 let rev = locked.rev.as_deref().ok_or_else(|| {
                     anyhow::anyhow!(
                         "dependency `{alias}` in {} does not record a git revision",
@@ -691,8 +688,7 @@ fn resolve_dependency(
                 ensure_git_dependency(
                     context.cache_root,
                     &url,
-                    tag,
-                    branch,
+                    Some(requested_ref),
                     context.mode == ResolveMode::Sync,
                     context.reporter,
                 )?
@@ -726,13 +722,18 @@ fn locked_git_source<'a>(
     lockfile: &'a Lockfile,
     alias: &str,
     url: &str,
-    tag: Option<&str>,
-    branch: Option<&str>,
+    requested_ref: RequestedGitRef<'_>,
 ) -> Result<&'a LockedSource> {
-    let matches_requested_ref = |source: &LockedSource| match (tag, branch) {
-        (Some(tag), None) => source.tag.as_deref() == Some(tag) && source.branch.is_none(),
-        (None, Some(branch)) => source.branch.as_deref() == Some(branch) && source.tag.is_none(),
-        _ => false,
+    let matches_requested_ref = |source: &LockedSource| match requested_ref {
+        RequestedGitRef::Tag(tag) => source.tag.as_deref() == Some(tag) && source.branch.is_none(),
+        RequestedGitRef::Branch(branch) => {
+            source.branch.as_deref() == Some(branch) && source.tag.is_none()
+        }
+        RequestedGitRef::Revision(revision) => {
+            source.rev.as_deref() == Some(revision)
+                && source.tag.is_none()
+                && source.branch.is_none()
+        }
     };
 
     let mut matching_sources = lockfile
@@ -1397,7 +1398,9 @@ mod tests {
         normalize_alias_from_url, remove_dependency_in_dir as remove_dependency_in_dir_impl,
         shared_checkout_path, shared_repository_path,
     };
-    use crate::manifest::{DependencyComponent, MANIFEST_FILE, load_root_from_dir};
+    use crate::manifest::{
+        DependencyComponent, MANIFEST_FILE, RequestedGitRef, load_root_from_dir,
+    };
     use crate::report::{ColorMode, Reporter};
 
     fn write_file(path: &Path, contents: &str) {
@@ -1614,8 +1617,31 @@ mod tests {
             project_root,
             cache_root,
             url,
-            tag,
             AddDependencyOptions {
+                git_ref: tag.map(RequestedGitRef::Tag),
+                adapters,
+                components,
+                sync_on_launch: false,
+            },
+            &reporter,
+        )
+    }
+
+    fn add_dependency_in_dir_with_git_ref(
+        project_root: &Path,
+        cache_root: &Path,
+        url: &str,
+        git_ref: RequestedGitRef<'_>,
+        adapters: &[Adapter],
+        components: &[DependencyComponent],
+    ) -> Result<AddSummary> {
+        let reporter = Reporter::silent();
+        add_dependency_in_dir_with_adapters_impl(
+            project_root,
+            cache_root,
+            url,
+            AddDependencyOptions {
+                git_ref: Some(git_ref),
                 adapters,
                 components,
                 sync_on_launch: false,
@@ -1830,6 +1856,57 @@ shared = { path = "vendor/shared" }
 
         let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
         assert!(manifest.contains("branch = \"main\""));
+    }
+
+    #[test]
+    fn add_dependency_tracks_an_explicit_branch() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+        rename_current_branch(repo.path(), "main");
+        tag_repo(repo.path(), "v0.1.0");
+
+        add_dependency_in_dir_with_git_ref(
+            temp.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            RequestedGitRef::Branch("main"),
+            &Adapter::ALL,
+            &[],
+        )
+        .unwrap();
+
+        let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("branch = \"main\""));
+        assert!(!manifest.contains("tag = "));
+    }
+
+    #[test]
+    fn add_dependency_pins_an_explicit_revision() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+        tag_repo(repo.path(), "v0.1.0");
+        let revision = crate::git::current_rev(repo.path()).unwrap();
+
+        add_dependency_in_dir_with_git_ref(
+            temp.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            RequestedGitRef::Revision(revision.as_str()),
+            &Adapter::ALL,
+            &[],
+        )
+        .unwrap();
+
+        let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains(&format!("revision = \"{revision}\"")));
+        assert!(!manifest.contains("tag = "));
+        assert!(!manifest.contains("branch = "));
     }
 
     #[test]

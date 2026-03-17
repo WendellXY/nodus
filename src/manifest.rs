@@ -71,6 +71,8 @@ pub struct DependencySpec {
     pub tag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    #[serde(default, alias = "rev", skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -432,16 +434,26 @@ impl LoadedManifest {
                         .as_deref()
                         .map(str::trim)
                         .unwrap_or_default();
-                    match (tag.is_empty(), branch.is_empty()) {
-                        (false, false) => {
-                            bail!("dependency `{alias}` must not declare both `tag` and `branch`")
-                        }
-                        (true, true) => {
+                    let revision = dependency
+                        .revision
+                        .as_deref()
+                        .map(str::trim)
+                        .unwrap_or_default();
+                    let requested_ref_count = usize::from(!tag.is_empty())
+                        + usize::from(!branch.is_empty())
+                        + usize::from(!revision.is_empty());
+                    match requested_ref_count {
+                        0 => {
                             bail!(
-                                "dependency `{alias}` must declare `tag` or `branch` for git sources"
+                                "dependency `{alias}` must declare `tag`, `branch`, or `revision` for git sources"
                             )
                         }
-                        _ => {}
+                        1 => {}
+                        _ => {
+                            bail!(
+                                "dependency `{alias}` must not declare more than one of `tag`, `branch`, or `revision`"
+                            )
+                        }
                     }
                 }
                 DependencySourceKind::Path => {
@@ -573,6 +585,9 @@ impl DependencySpec {
         if let Some(branch) = &self.branch {
             fields.push(format!("branch = {}", quote(branch)));
         }
+        if let Some(revision) = &self.revision {
+            fields.push(format!("revision = {}", quote(revision)));
+        }
         if let Some(version) = &self.version {
             fields.push(format!("version = {}", quote(&version.to_string())));
         }
@@ -653,11 +668,20 @@ impl DependencySpec {
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty()),
+            self.revision
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
         ) {
-            (Some(tag), None) => Ok(RequestedGitRef::Tag(tag)),
-            (None, Some(branch)) => Ok(RequestedGitRef::Branch(branch)),
-            (Some(_), Some(_)) => bail!("git dependency must not declare both `tag` and `branch`"),
-            (None, None) => bail!("git dependency must declare `tag` or `branch`"),
+            (Some(tag), None, None) => Ok(RequestedGitRef::Tag(tag)),
+            (None, Some(branch), None) => Ok(RequestedGitRef::Branch(branch)),
+            (None, None, Some(revision)) => Ok(RequestedGitRef::Revision(revision)),
+            (None, None, None) => {
+                bail!("git dependency must declare `tag`, `branch`, or `revision`")
+            }
+            _ => bail!(
+                "git dependency must not declare more than one of `tag`, `branch`, or `revision`"
+            ),
         }
     }
 
@@ -676,9 +700,11 @@ impl ManagedPathSpec {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestedGitRef<'a> {
     Tag(&'a str),
     Branch(&'a str),
+    Revision(&'a str),
 }
 
 impl PackageContents {
@@ -811,6 +837,7 @@ fn load_claude_marketplace_wrapper(loaded: &LoadedManifest) -> Result<Option<Loa
                 path: Some(source_path),
                 tag: None,
                 branch: None,
+                revision: None,
                 version: declared_version
                     .clone()
                     .or_else(|| plugin_manifest.effective_version()),
@@ -1806,6 +1833,7 @@ playbook_ios = { github = "wenext-limited", tag = "v0.1.0" }
                 path: None,
                 tag: Some("v0.1.0".into()),
                 branch: None,
+                revision: None,
                 version: Some(Version::parse("0.1.0").unwrap()),
                 components: Some(vec![
                     DependencyComponent::Rules,
@@ -1836,6 +1864,7 @@ playbook_ios = { github = "wenext-limited", tag = "v0.1.0" }
                 path: None,
                 tag: Some("v1.2.3".into()),
                 branch: None,
+                revision: None,
                 version: None,
                 components: None,
                 managed: Some(vec![
@@ -1964,6 +1993,7 @@ sync_on_startup = false
             path: None,
             tag: Some("v0.1.0".into()),
             branch: None,
+            revision: None,
             version: None,
             components: None,
             managed: None,

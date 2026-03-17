@@ -40,6 +40,9 @@ enum DependencyStatus {
         branch: String,
         latest_rev: String,
     },
+    GitRevisionCurrent {
+        rev: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +70,9 @@ enum DependencyProbe {
         branch: String,
         locked_rev: Option<String>,
         latest_rev: String,
+    },
+    GitRevision {
+        rev: String,
     },
 }
 
@@ -101,6 +107,9 @@ impl DependencyReport {
                 "branch {branch} at {} (not locked locally)",
                 short_rev(latest_rev)
             ),
+            DependencyStatus::GitRevisionCurrent { rev } => {
+                format!("pinned to revision {}", short_rev(rev))
+            }
         };
         format!("{:<20} {}", self.alias, status)
     }
@@ -214,8 +223,7 @@ fn probe_dependencies(
                                 let rev = ensure_git_dependency(
                                     cache_root,
                                     &url,
-                                    None,
-                                    Some(branch),
+                                    Some(RequestedGitRef::Branch(branch)),
                                     true,
                                     &reporter,
                                 )?
@@ -230,6 +238,9 @@ fn probe_dependencies(
                             latest_rev,
                         }
                     }
+                    RequestedGitRef::Revision(rev) => DependencyProbe::GitRevision {
+                        rev: rev.to_string(),
+                    },
                 };
                 group_probes.push((dependency.alias.clone(), probe));
             }
@@ -286,6 +297,9 @@ fn report_for_dependency(alias: &str, probe: &DependencyProbe) -> Result<Depende
                 latest_rev: latest_rev.clone(),
             },
         },
+        DependencyProbe::GitRevision { rev } => {
+            DependencyStatus::GitRevisionCurrent { rev: rev.clone() }
+        }
     };
 
     Ok(DependencyReport {
@@ -416,8 +430,8 @@ mod tests {
             project.path(),
             cache.path(),
             &repo.path().to_string_lossy(),
-            Some("v0.1.0"),
             crate::git::AddDependencyOptions {
+                git_ref: Some(RequestedGitRef::Tag("v0.1.0")),
                 adapters: &[Adapter::Codex],
                 components: &[],
                 sync_on_launch: false,
@@ -448,8 +462,8 @@ mod tests {
             project.path(),
             cache.path(),
             &repo.path().to_string_lossy(),
-            Some("v0.1.0"),
             crate::git::AddDependencyOptions {
+                git_ref: Some(RequestedGitRef::Tag("v0.1.0")),
                 adapters: &[Adapter::Codex],
                 components: &[],
                 sync_on_launch: false,
@@ -481,8 +495,8 @@ mod tests {
             project.path(),
             cache.path(),
             &repo.path().to_string_lossy(),
-            None,
             crate::git::AddDependencyOptions {
+                git_ref: None,
                 adapters: &[Adapter::Codex],
                 components: &[],
                 sync_on_launch: false,
@@ -500,6 +514,41 @@ mod tests {
 
         assert_eq!(summary.outdated_count, 1);
         assert!(output.contents().contains("outdated: branch main"));
+    }
+
+    #[test]
+    fn reports_revision_pins_as_current() {
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+        let revision = crate::git::current_rev(repo.path()).unwrap();
+
+        let (reporter, _) = make_reporter();
+        add_dependency_in_dir_with_adapters(
+            project.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            crate::git::AddDependencyOptions {
+                git_ref: Some(RequestedGitRef::Revision(revision.as_str())),
+                adapters: &[Adapter::Codex],
+                components: &[],
+                sync_on_launch: false,
+            },
+            &reporter,
+        )
+        .unwrap();
+
+        write_file(&repo.path().join("skills/review/extra.md"), "# Extra\n");
+        run_git(repo.path(), &["add", "."]);
+        run_git(repo.path(), &["commit", "-m", "advance"]);
+
+        let (reporter, output) = make_reporter();
+        let summary = check_outdated_in_dir(project.path(), cache.path(), &reporter).unwrap();
+
+        assert_eq!(summary.outdated_count, 0);
+        assert!(output.contents().contains("pinned to revision"));
     }
 
     #[test]

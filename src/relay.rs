@@ -1013,8 +1013,8 @@ mod tests {
             project,
             cache,
             &remote.to_string_lossy(),
-            Some("v0.1.0"),
             AddDependencyOptions {
+                git_ref: Some(crate::manifest::RequestedGitRef::Tag("v0.1.0")),
                 adapters,
                 components: &[],
                 sync_on_launch: false,

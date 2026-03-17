@@ -7,18 +7,12 @@ use sha2::{Digest, Sha256};
 
 use crate::adapters::Adapter;
 use crate::manifest::{
-    DependencyComponent, DependencySpec, MANIFEST_FILE, PackageRole, load_dependency_from_dir,
-    load_from_dir, normalize_dependency_alias, write_manifest,
+    DependencyComponent, DependencySpec, MANIFEST_FILE, PackageRole, RequestedGitRef,
+    load_dependency_from_dir, load_from_dir, normalize_dependency_alias, write_manifest,
 };
 use crate::report::Reporter;
 use crate::resolver::{sync_in_dir, sync_in_dir_with_adapters};
 use crate::selection::{resolve_adapter_selection, should_prompt_for_adapter};
-
-#[derive(Debug, Clone, Copy)]
-enum RequestedGitRef<'a> {
-    Tag(&'a str),
-    Branch(&'a str),
-}
 
 #[derive(Debug, Clone)]
 pub struct GitCheckout {
@@ -45,6 +39,7 @@ pub struct RemoveSummary {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AddDependencyOptions<'a> {
+    pub git_ref: Option<RequestedGitRef<'a>>,
     pub adapters: &'a [Adapter],
     pub components: &'a [DependencyComponent],
     pub sync_on_launch: bool,
@@ -63,12 +58,11 @@ impl GitCheckout {
 pub fn add_dependency_with_adapters(
     cache_root: &Path,
     url: &str,
-    tag: Option<&str>,
     options: AddDependencyOptions<'_>,
     reporter: &Reporter,
 ) -> Result<AddSummary> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    add_dependency_in_dir_with_adapters(&cwd, cache_root, url, tag, options, reporter)
+    add_dependency_in_dir_with_adapters(&cwd, cache_root, url, options, reporter)
 }
 
 #[allow(dead_code)]
@@ -85,13 +79,13 @@ pub fn add_dependency_in_dir_with_adapters(
     project_root: &Path,
     cache_root: &Path,
     url: &str,
-    tag: Option<&str>,
     options: AddDependencyOptions<'_>,
     reporter: &Reporter,
 ) -> Result<AddSummary> {
     let normalized_url = normalize_git_url(url);
     let alias = normalize_alias_from_url(&normalized_url)?;
-    let checkout = ensure_git_dependency(cache_root, &normalized_url, tag, None, true, reporter)?;
+    let checkout =
+        ensure_git_dependency(cache_root, &normalized_url, options.git_ref, true, reporter)?;
     let github = github_slug_from_url(&checkout.url);
     let dependency_manifest = load_dependency_from_dir(&checkout.path)
         .with_context(|| format!("dependency `{alias}` does not match the Nodus package layout"))?;
@@ -119,6 +113,10 @@ pub fn add_dependency_in_dir_with_adapters(
             path: None,
             tag: checkout.tag.clone(),
             branch: checkout.branch.clone(),
+            revision: options.git_ref.and_then(|git_ref| match git_ref {
+                RequestedGitRef::Revision(_) => Some(checkout.rev.clone()),
+                _ => None,
+            }),
             version: checkout
                 .branch
                 .as_ref()
@@ -196,8 +194,7 @@ pub fn remove_dependency_in_dir(
 pub fn ensure_git_dependency(
     cache_root: &Path,
     url: &str,
-    tag: Option<&str>,
-    branch: Option<&str>,
+    requested_ref: Option<RequestedGitRef<'_>>,
     allow_network: bool,
     reporter: &Reporter,
 ) -> Result<GitCheckout> {
@@ -205,35 +202,39 @@ pub fn ensure_git_dependency(
     let mirror_path = shared_repository_path(cache_root, &normalized_url)?;
     ensure_shared_repository(&mirror_path, &normalized_url, allow_network, reporter)?;
 
-    let requested_ref = match (tag, branch) {
-        (Some(tag), None) => Some(RequestedGitRef::Tag(tag)),
-        (None, Some(branch)) => Some(RequestedGitRef::Branch(branch)),
-        (Some(_), Some(_)) => bail!("git dependency must not request both `tag` and `branch`"),
-        (None, None) => None,
-    };
-    let (resolved_tag, resolved_branch) = if let Some(requested_ref) = requested_ref {
+    let (resolved_tag, resolved_branch, rev) = if let Some(requested_ref) = requested_ref {
         match requested_ref {
-            RequestedGitRef::Tag(value) => (Some(value.to_string()), None),
-            RequestedGitRef::Branch(value) => (None, Some(value.to_string())),
+            RequestedGitRef::Tag(value) => (
+                Some(value.to_string()),
+                None,
+                resolve_ref_to_rev(&mirror_path, value)?,
+            ),
+            RequestedGitRef::Branch(value) => (
+                None,
+                Some(value.to_string()),
+                resolve_ref_to_rev(&mirror_path, value)?,
+            ),
+            RequestedGitRef::Revision(value) => {
+                (None, None, resolve_ref_to_rev(&mirror_path, value)?)
+            }
         }
     } else {
         reporter.status("Resolving", format!("latest tag for {normalized_url}"))?;
         match latest_tag_name(&mirror_path)? {
-            Some(tag) => (Some(tag), None),
+            Some(tag) => {
+                let rev = resolve_ref_to_rev(&mirror_path, &tag)?;
+                (Some(tag), None, rev)
+            }
             None => {
                 let branch = default_branch(&mirror_path)?;
                 reporter.note(format!(
                     "no git tags found for {normalized_url}; using default branch {branch}"
                 ))?;
-                (None, Some(branch))
+                let rev = resolve_ref_to_rev(&mirror_path, &branch)?;
+                (None, Some(branch), rev)
             }
         }
     };
-    let resolved_ref = resolved_tag
-        .as_deref()
-        .or(resolved_branch.as_deref())
-        .ok_or_else(|| anyhow!("failed to resolve git reference for {normalized_url}"))?;
-    let rev = resolve_ref_to_rev(&mirror_path, resolved_ref)?;
     let checkout_path = shared_checkout_path(cache_root, &normalized_url, &rev)?;
 
     ensure_shared_checkout(
@@ -780,6 +781,7 @@ mod tests {
                 path: None,
                 tag: Some("v0.1.0".into()),
                 branch: None,
+                revision: None,
                 version: None,
                 components: None,
                 managed: None,
@@ -803,6 +805,7 @@ mod tests {
                 path: None,
                 tag: Some("v0.1.0".into()),
                 branch: None,
+                revision: None,
                 version: None,
                 components: None,
                 managed: None,
@@ -852,7 +855,6 @@ mod tests {
         let checkout = ensure_git_dependency(
             cache_root.path(),
             &repo.path().to_string_lossy(),
-            None,
             None,
             true,
             &reporter,

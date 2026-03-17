@@ -168,7 +168,18 @@ fn load_package_info(
 
     let normalized_url = normalize_git_url(trimmed);
     let alias = normalize_alias_from_url(&normalized_url)?;
-    let checkout = ensure_git_dependency(cache_root, &normalized_url, tag, branch, true, reporter)?;
+    let checkout = ensure_git_dependency(
+        cache_root,
+        &normalized_url,
+        match (tag, branch) {
+            (Some(tag), None) => Some(crate::manifest::RequestedGitRef::Tag(tag)),
+            (None, Some(branch)) => Some(crate::manifest::RequestedGitRef::Branch(branch)),
+            (None, None) => None,
+            _ => bail!("git dependency must not request both `tag` and `branch`"),
+        },
+        true,
+        reporter,
+    )?;
     let manifest = load_package_manifest(&checkout.path)
         .with_context(|| format!("dependency `{alias}` does not match the Nodus package layout"))?;
 
@@ -252,12 +263,27 @@ fn load_from_dependency_spec(
         DependencySourceKind::Git => {
             let url = dependency.resolved_git_url()?;
             let checkout = match dependency.requested_git_ref()? {
-                crate::manifest::RequestedGitRef::Tag(tag) => {
-                    ensure_git_dependency(cache_root, &url, Some(tag), None, true, reporter)?
-                }
-                crate::manifest::RequestedGitRef::Branch(branch) => {
-                    ensure_git_dependency(cache_root, &url, None, Some(branch), true, reporter)?
-                }
+                crate::manifest::RequestedGitRef::Tag(tag) => ensure_git_dependency(
+                    cache_root,
+                    &url,
+                    Some(crate::manifest::RequestedGitRef::Tag(tag)),
+                    true,
+                    reporter,
+                )?,
+                crate::manifest::RequestedGitRef::Branch(branch) => ensure_git_dependency(
+                    cache_root,
+                    &url,
+                    Some(crate::manifest::RequestedGitRef::Branch(branch)),
+                    true,
+                    reporter,
+                )?,
+                crate::manifest::RequestedGitRef::Revision(revision) => ensure_git_dependency(
+                    cache_root,
+                    &url,
+                    Some(crate::manifest::RequestedGitRef::Revision(revision)),
+                    true,
+                    reporter,
+                )?,
             };
             let manifest = load_package_manifest(&checkout.path).with_context(|| {
                 format!("dependency `{alias}` does not match the Nodus package layout")

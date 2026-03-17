@@ -130,7 +130,7 @@ nodus add obra/superpowers --adapter codex --component skills --component rules
 
 这一条命令会：
 
-- 在未传入 `--tag` 时解析最新 tag
+- 在未传入 `--tag`、`--branch` 或 `--revision` 时解析最新 tag
 - 将依赖写入 `nodus.toml`
 - 在需要时持久化适配器选择
 - 将精确状态锁定到 `nodus.lock`
@@ -251,6 +251,13 @@ local_playbook = { path = "vendor/playbook" }
 axiom = { github = "CharlesWiltgen/Axiom", branch = "main", version = "2.34.0" }
 ```
 
+你也可以把依赖固定到某个精确的 Git commit：
+
+```toml
+[dependencies]
+superpowers = { github = "obra/superpowers", revision = "0123456789abcdef0123456789abcdef01234567" }
+```
+
 可选能力仍然受支持：
 
 ```toml
@@ -274,6 +281,7 @@ justification = "Run repository checks."
 - `dependencies.<alias>.path`
 - `dependencies.<alias>.tag`
 - `dependencies.<alias>.branch`
+- `dependencies.<alias>.revision`
 - `dependencies.<alias>.version`
 - `dependencies.<alias>.components`
 
@@ -335,6 +343,13 @@ nodus add <url>
 nodus add <url> --tag <tag>
 ```
 
+也可以显式跟踪某个 branch 或精确 commit：
+
+```bash
+nodus add <url> --branch <branch>
+nodus add <url> --revision <commit>
+```
+
 你也可以显式选择一个或多个适配器：
 
 ```bash
@@ -361,8 +376,8 @@ nodus --store-path /tmp/nodus-store add <url>
 - 从仓库名推导依赖别名
 - 将共享 bare mirror 拉取到共享存储根目录中
 - 在共享存储根目录下为已解析修订版本物化共享检出
-- 当省略 `--tag` 时解析最新 tag
-- 检出已解析 tag
+- 当未提供 Git 选择器时解析最新 tag
+- 将 `tag`、`branch` 或 `revision` 写入 `nodus.toml`
 - 校验发现到的包布局或依赖包装清单
 - 创建或更新 `nodus.toml`
 - 只在调用方清单中记录你直接添加的依赖

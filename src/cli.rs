@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use crate::adapters::Adapter;
-use crate::manifest::DependencyComponent;
+use crate::manifest::{DependencyComponent, RequestedGitRef};
 use crate::report::Reporter;
 use crate::review::ReviewProvider;
 
@@ -37,9 +37,22 @@ enum Command {
         url: String,
         #[arg(
             long,
+            conflicts_with_all = ["branch", "revision"],
             help = "Pin a specific Git tag instead of resolving the latest tag"
         )]
         tag: Option<String>,
+        #[arg(
+            long,
+            conflicts_with_all = ["tag", "revision"],
+            help = "Track a specific Git branch instead of resolving the latest tag"
+        )]
+        branch: Option<String>,
+        #[arg(
+            long,
+            conflicts_with_all = ["tag", "branch"],
+            help = "Pin a specific Git commit revision"
+        )]
+        revision: Option<String>,
         #[arg(
             long,
             value_enum,
@@ -184,6 +197,8 @@ fn run_command_in_dir(
         Command::Add {
             url,
             tag,
+            branch,
+            revision,
             adapter,
             component,
             sync_on_launch,
@@ -192,8 +207,12 @@ fn run_command_in_dir(
                 cwd,
                 cache_root,
                 &url,
-                tag.as_deref(),
                 crate::git::AddDependencyOptions {
+                    git_ref: requested_git_ref(
+                        tag.as_deref(),
+                        branch.as_deref(),
+                        revision.as_deref(),
+                    )?,
                     adapters: &adapter,
                     components: &component,
                     sync_on_launch,
@@ -381,6 +400,22 @@ fn format_adapters(adapters: &[Adapter]) -> String {
         .map(|adapter| adapter.as_str())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn requested_git_ref<'a>(
+    tag: Option<&'a str>,
+    branch: Option<&'a str>,
+    revision: Option<&'a str>,
+) -> anyhow::Result<Option<RequestedGitRef<'a>>> {
+    match (tag, branch, revision) {
+        (Some(tag), None, None) => Ok(Some(RequestedGitRef::Tag(tag))),
+        (None, Some(branch), None) => Ok(Some(RequestedGitRef::Branch(branch))),
+        (None, None, Some(revision)) => Ok(Some(RequestedGitRef::Revision(revision))),
+        (None, None, None) => Ok(None),
+        _ => anyhow::bail!(
+            "git dependency must not declare more than one of `tag`, `branch`, or `revision`"
+        ),
+    }
 }
 
 fn display_path(path: &std::path::Path) -> String {
@@ -634,6 +669,8 @@ mod tests {
 
         assert!(help.contains("Git URL, local path, or GitHub shortcut like owner/repo"));
         assert!(help.contains("Pin a specific Git tag instead of resolving the latest tag"));
+        assert!(help.contains("Track a specific Git branch instead of resolving the latest tag"));
+        assert!(help.contains("Pin a specific Git commit revision"));
         assert!(help.contains("Select one or more adapters to persist for this repository"));
         assert!(help.contains("Select which dependency components to install from the package"));
         assert!(help.contains("Persist project startup hooks"));
@@ -674,6 +711,42 @@ mod tests {
                     adapter,
                     vec![super::Adapter::Codex, super::Adapter::OpenCode]
                 );
+            }
+            other => panic!("expected add command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_add_branch_and_revision_flags() {
+        let branch =
+            Cli::try_parse_from(["nodus", "add", "example/repo", "--branch", "main"]).unwrap();
+        let revision =
+            Cli::try_parse_from(["nodus", "add", "example/repo", "--revision", "abc1234"]).unwrap();
+
+        match branch.command {
+            Command::Add {
+                tag,
+                branch,
+                revision,
+                ..
+            } => {
+                assert_eq!(tag, None);
+                assert_eq!(branch.as_deref(), Some("main"));
+                assert_eq!(revision, None);
+            }
+            other => panic!("expected add command, got {other:?}"),
+        }
+
+        match revision.command {
+            Command::Add {
+                tag,
+                branch,
+                revision,
+                ..
+            } => {
+                assert_eq!(tag, None);
+                assert_eq!(branch, None);
+                assert_eq!(revision.as_deref(), Some("abc1234"));
             }
             other => panic!("expected add command, got {other:?}"),
         }
@@ -790,6 +863,8 @@ version = "0.1.0"
             Command::Add {
                 url,
                 tag: None,
+                branch: None,
+                revision: None,
                 adapter: vec![Adapter::Codex],
                 component: vec![],
                 sync_on_launch: false,
@@ -864,6 +939,8 @@ justification = "Run checks."
             Command::Add {
                 url,
                 tag: Some("v0.1.0".into()),
+                branch: None,
+                revision: None,
                 adapter: vec![Adapter::Codex],
                 component: vec![],
                 sync_on_launch: false,

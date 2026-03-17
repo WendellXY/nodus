@@ -39,6 +39,7 @@ enum DependencyUpdatePlan {
         latest_rev: String,
         latest_version: Option<Version>,
     },
+    GitRevision,
 }
 
 pub fn update_direct_dependencies_in_dir(
@@ -117,6 +118,7 @@ pub fn update_direct_dependencies_in_dir(
                     manifest_changed = true;
                 }
             }
+            DependencyUpdatePlan::GitRevision => {}
         }
     }
 
@@ -192,8 +194,7 @@ fn plan_dependency_updates(
                                 let checkout = ensure_git_dependency(
                                     cache_root,
                                     &url,
-                                    None,
-                                    Some(branch),
+                                    Some(RequestedGitRef::Branch(branch)),
                                     true,
                                     &reporter,
                                 )?;
@@ -214,6 +215,7 @@ fn plan_dependency_updates(
                             latest_version,
                         }
                     }
+                    RequestedGitRef::Revision(_) => DependencyUpdatePlan::GitRevision,
                 };
                 group_plans.push((dependency.alias.clone(), plan));
             }
@@ -320,8 +322,8 @@ mod tests {
             project.path(),
             cache.path(),
             &repo.path().to_string_lossy(),
-            Some("v0.1.0"),
             crate::git::AddDependencyOptions {
+                git_ref: Some(RequestedGitRef::Tag("v0.1.0")),
                 adapters: &[Adapter::Codex],
                 components: &[],
                 sync_on_launch: false,
@@ -369,8 +371,8 @@ mod tests {
             project.path(),
             cache.path(),
             &repo.path().to_string_lossy(),
-            None,
             crate::git::AddDependencyOptions {
+                git_ref: None,
                 adapters: &[Adapter::Codex],
                 components: &[],
                 sync_on_launch: false,
@@ -412,6 +414,56 @@ mod tests {
             locked.source.rev.as_deref(),
             Some(current_rev(repo.path()).unwrap().as_str())
         );
+    }
+
+    #[test]
+    fn keeps_revision_pinned_dependencies_at_the_requested_commit() {
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+        let revision = current_rev(repo.path()).unwrap();
+
+        add_dependency_in_dir_with_adapters(
+            project.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            crate::git::AddDependencyOptions {
+                git_ref: Some(RequestedGitRef::Revision(revision.as_str())),
+                adapters: &[Adapter::Codex],
+                components: &[],
+                sync_on_launch: false,
+            },
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        write_file(&repo.path().join("rules/policy.md"), "# Policy\n");
+        run_git(repo.path(), &["add", "."]);
+        run_git(repo.path(), &["commit", "-m", "advance"]);
+
+        let summary = update_direct_dependencies_in_dir(
+            project.path(),
+            cache.path(),
+            false,
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        let root = load_root_from_dir(project.path()).unwrap();
+        let dependency = root.manifest.dependencies.values().next().unwrap();
+        let lockfile =
+            Lockfile::read(&project.path().join(crate::lockfile::LOCKFILE_NAME)).unwrap();
+        let locked = lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias != "root")
+            .unwrap();
+
+        assert_eq!(summary.updated_count, 0);
+        assert_eq!(dependency.revision.as_deref(), Some(revision.as_str()));
+        assert_eq!(locked.source.rev.as_deref(), Some(revision.as_str()));
     }
 
     #[test]

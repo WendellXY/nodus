@@ -360,7 +360,18 @@ fn resolve_review_target(
 
     let normalized_url = normalize_git_url(trimmed);
     let alias = normalize_alias_from_url(&normalized_url)?;
-    let checkout = ensure_git_dependency(cache_root, &normalized_url, tag, branch, true, reporter)?;
+    let checkout = ensure_git_dependency(
+        cache_root,
+        &normalized_url,
+        match (tag, branch) {
+            (Some(tag), None) => Some(ManifestRequestedGitRef::Tag(tag)),
+            (None, Some(branch)) => Some(ManifestRequestedGitRef::Branch(branch)),
+            (None, None) => None,
+            _ => bail!("git dependency must not request both `tag` and `branch`"),
+        },
+        true,
+        reporter,
+    )?;
     let manifest = load_dependency_from_dir(&checkout.path)
         .with_context(|| format!("dependency `{alias}` does not match the Nodus package layout"))?;
 
@@ -441,12 +452,27 @@ fn resolve_from_dependency_spec(
         DependencySourceKind::Git => {
             let url = dependency.resolved_git_url()?;
             let checkout = match dependency.requested_git_ref()? {
-                ManifestRequestedGitRef::Tag(tag) => {
-                    ensure_git_dependency(cache_root, &url, Some(tag), None, true, reporter)?
-                }
-                ManifestRequestedGitRef::Branch(branch) => {
-                    ensure_git_dependency(cache_root, &url, None, Some(branch), true, reporter)?
-                }
+                ManifestRequestedGitRef::Tag(tag) => ensure_git_dependency(
+                    cache_root,
+                    &url,
+                    Some(ManifestRequestedGitRef::Tag(tag)),
+                    true,
+                    reporter,
+                )?,
+                ManifestRequestedGitRef::Branch(branch) => ensure_git_dependency(
+                    cache_root,
+                    &url,
+                    Some(ManifestRequestedGitRef::Branch(branch)),
+                    true,
+                    reporter,
+                )?,
+                ManifestRequestedGitRef::Revision(revision) => ensure_git_dependency(
+                    cache_root,
+                    &url,
+                    Some(ManifestRequestedGitRef::Revision(revision)),
+                    true,
+                    reporter,
+                )?,
             };
             let manifest = load_dependency_from_dir(&checkout.path).with_context(|| {
                 format!("dependency `{alias}` does not match the Nodus package layout")

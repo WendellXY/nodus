@@ -130,7 +130,7 @@ nodus add obra/superpowers --adapter codex --component skills --component rules
 
 That one command:
 
-- resolves the latest tag unless you pass `--tag`
+- resolves the latest tag unless you pass `--tag`, `--branch`, or `--revision`
 - writes the dependency to `nodus.toml`
 - persists adapter selection when needed
 - locks exact state in `nodus.lock`
@@ -251,6 +251,13 @@ package's own semantic version separately from the transport ref:
 axiom = { github = "CharlesWiltgen/Axiom", branch = "main", version = "2.34.0" }
 ```
 
+You can also pin a dependency to an exact Git commit:
+
+```toml
+[dependencies]
+superpowers = { github = "obra/superpowers", revision = "0123456789abcdef0123456789abcdef01234567" }
+```
+
 Optional capabilities are still supported:
 
 ```toml
@@ -274,6 +281,7 @@ justification = "Run repository checks."
 - `dependencies.<alias>.path`
 - `dependencies.<alias>.tag`
 - `dependencies.<alias>.branch`
+- `dependencies.<alias>.revision`
 - `dependencies.<alias>.version`
 - `dependencies.<alias>.components`
 
@@ -334,6 +342,13 @@ You can still pin a specific tag explicitly:
 nodus add <url> --tag <tag>
 ```
 
+Or track a specific branch or exact commit:
+
+```bash
+nodus add <url> --branch <branch>
+nodus add <url> --revision <commit>
+```
+
 You can explicitly choose one or more adapters:
 
 ```bash
@@ -360,8 +375,8 @@ Behavior:
 - infers the dependency alias from the repo name
 - fetches a shared bare mirror into the shared store root
 - materializes a shared checkout for the resolved revision under the shared store root
-- resolves the latest tag when `--tag` is omitted
-- checks out the resolved tag
+- resolves the latest tag when no Git selector is provided
+- writes either `tag`, `branch`, or `revision` into `nodus.toml`
 - validates the discovered package layout or dependency wrapper manifest
 - creates or updates `nodus.toml`
 - records only the direct dependency you added in the caller manifest
