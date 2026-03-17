@@ -10,7 +10,7 @@ use crate::store::write_atomic;
 const LOCAL_DIR: &str = ".nodus";
 const LOCAL_CONFIG_FILE: &str = "local.toml";
 const LOCAL_GITIGNORE_FILE: &str = ".gitignore";
-const LOCAL_GITIGNORE_ENTRY: &str = "local.toml";
+const LOCAL_GITIGNORE_ENTRIES: [&str; 2] = [".gitignore", "local.toml"];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalConfig {
@@ -73,11 +73,10 @@ pub fn ensure_local_gitignore(project_root: &Path) -> Result<()> {
         Vec::new()
     };
 
-    if !lines
-        .iter()
-        .any(|line| line.trim() == LOCAL_GITIGNORE_ENTRY)
-    {
-        lines.push(LOCAL_GITIGNORE_ENTRY.to_string());
+    for entry in LOCAL_GITIGNORE_ENTRIES {
+        if !lines.iter().any(|line| line.trim() == entry) {
+            lines.push(entry.to_string());
+        }
     }
 
     let mut contents = lines.join("\n");
@@ -121,6 +120,6 @@ mod tests {
         assert_eq!(reloaded, config);
 
         let gitignore = fs::read_to_string(temp.path().join(".nodus/.gitignore")).unwrap();
-        assert_eq!(gitignore, "local.toml\n");
+        assert_eq!(gitignore, ".gitignore\nlocal.toml\n");
     }
 }
