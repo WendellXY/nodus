@@ -18,7 +18,7 @@ use crate::lockfile::LOCKFILE_NAME;
 use crate::manifest::{DependencySourceKind, MANIFEST_FILE, SkillEntry, load_root_from_dir};
 use crate::report::Reporter;
 use crate::resolver::{
-    PackageSource, ResolvedPackage, resolve_project_from_current_lockfile_in_dir,
+    PackageSource, ResolvedPackage, resolve_project_from_existing_lockfile_in_dir,
 };
 use crate::selection::resolve_adapter_selection;
 use crate::store::snapshot_resolution;
@@ -297,7 +297,7 @@ fn load_workspace(
     let selection = resolve_adapter_selection(project_root, &root.manifest, &[], false)?;
     let selected_adapters = Adapters::from_slice(&selection.adapters);
     let local_config = LocalConfig::load_in_dir(project_root)?;
-    let (resolution, _lockfile) = resolve_project_from_current_lockfile_in_dir(
+    let (resolution, _lockfile) = resolve_project_from_existing_lockfile_in_dir(
         project_root,
         cache_root,
         selected_adapters,
@@ -342,7 +342,7 @@ fn load_workspace_if_linked(
     let selection = resolve_adapter_selection(project_root, &root.manifest, &[], false)?;
     let selected_adapters = Adapters::from_slice(&selection.adapters);
 
-    let (resolution, _lockfile) = resolve_project_from_current_lockfile_in_dir(
+    let (resolution, _lockfile) = resolve_project_from_existing_lockfile_in_dir(
         project_root,
         cache_root,
         selected_adapters,
@@ -1134,7 +1134,7 @@ mod tests {
 
     fn resolved_package(project: &Path, cache: &Path, adapters: &[Adapter]) -> ResolvedPackage {
         let reporter = Reporter::silent();
-        let (resolution, _) = resolve_project_from_current_lockfile_in_dir(
+        let (resolution, _) = resolve_project_from_existing_lockfile_in_dir(
             project,
             cache,
             Adapters::from_slice(adapters),
@@ -1563,6 +1563,44 @@ target = ".github/prompts/review.md"
         .unwrap_err()
         .to_string();
         assert!(remove_error.contains("pending relay edits"));
+    }
+
+    #[test]
+    fn stale_lockfile_does_not_block_sync_relay_preflight_without_pending_edits() {
+        let (_remote_root, remote_repo) = create_remote_dependency();
+        let linked = clone_linked_repo(&remote_repo);
+        let linked_repo = linked.path().join("linked");
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        install_dependency(
+            project.path(),
+            cache.path(),
+            &remote_repo,
+            &[Adapter::Codex],
+        );
+
+        relay_dependency_in_dir(
+            project.path(),
+            cache.path(),
+            "playbook_ios",
+            Some(&linked_repo),
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        write_file(
+            &project.path().join("skills/root-review/SKILL.md"),
+            "---\nname: Root Review\ndescription: Example.\n---\n# Root Review\n",
+        );
+
+        crate::resolver::sync_in_dir(
+            project.path(),
+            cache.path(),
+            false,
+            false,
+            &Reporter::silent(),
+        )
+        .unwrap();
     }
 
     #[test]

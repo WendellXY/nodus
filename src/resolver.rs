@@ -747,10 +747,10 @@ pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Resu
     })
 }
 
-pub fn resolve_project_from_current_lockfile_in_dir(
+pub fn resolve_project_from_existing_lockfile_in_dir(
     cwd: &Path,
     cache_root: &Path,
-    selected_adapters: Adapters,
+    _selected_adapters: Adapters,
     reporter: &Reporter,
 ) -> Result<(Resolution, Lockfile)> {
     let lockfile_path = cwd.join(LOCKFILE_NAME);
@@ -767,10 +767,6 @@ pub fn resolve_project_from_current_lockfile_in_dir(
         Some(&lockfile),
         None,
     )?;
-    let expected = resolution.to_lockfile(selected_adapters)?;
-    if lockfile != expected {
-        bail!("{}", lockfile_out_of_date_message());
-    }
 
     Ok((resolution, lockfile))
 }
@@ -1921,13 +1917,13 @@ mod tests {
         super::doctor_in_dir(cwd, cache_root, &reporter)
     }
 
-    fn resolve_project_from_current_lockfile_in_dir(
+    fn resolve_project_from_existing_lockfile_in_dir(
         cwd: &Path,
         cache_root: &Path,
         adapters: &[Adapter],
     ) -> Result<(Resolution, Lockfile)> {
         let reporter = Reporter::silent();
-        super::resolve_project_from_current_lockfile_in_dir(
+        super::resolve_project_from_existing_lockfile_in_dir(
             cwd,
             cache_root,
             Adapters::from_slice(adapters),
@@ -4395,7 +4391,7 @@ shared = { path = "vendor/shared" }
     }
 
     #[test]
-    fn current_lockfile_resolution_reports_actionable_lockfile_drift() {
+    fn existing_lockfile_resolution_accepts_lockfile_drift_for_baseline_checks() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
         write_skill(&temp.path().join("skills/review"), "Review");
@@ -4403,12 +4399,11 @@ shared = { path = "vendor/shared" }
 
         write_skill(&temp.path().join("skills/renamed"), "Renamed");
 
-        let error =
-            resolve_project_from_current_lockfile_in_dir(temp.path(), cache.path(), &Adapter::ALL)
-                .unwrap_err()
-                .to_string();
-        assert!(error.contains("run `nodus sync`"));
-        assert!(error.contains("run `nodus doctor`"));
+        let (resolution, lockfile) =
+            resolve_project_from_existing_lockfile_in_dir(temp.path(), cache.path(), &Adapter::ALL)
+                .unwrap();
+        assert!(!resolution.packages.is_empty());
+        assert!(!lockfile.packages.is_empty());
     }
 
     #[test]
