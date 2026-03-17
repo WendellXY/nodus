@@ -593,41 +593,52 @@ fn ensure_shared_repository(
     reporter: &Reporter,
 ) -> Result<()> {
     if mirror_path.exists() {
-        if !is_bare_repository(mirror_path)? {
-            bail!(
-                "shared repository mirror at {} is not a bare git repository",
-                mirror_path.display()
-            );
-        }
+        let bare = is_bare_repository(mirror_path).unwrap_or(false);
+        let remote_matches = bare
+            && git_output(mirror_path, ["remote", "get-url", "origin"])
+                .ok()
+                .is_some_and(|remote_url| git_urls_match(remote_url.trim(), normalized_url));
 
-        let remote_url = git_output(mirror_path, ["remote", "get-url", "origin"])?;
-        if !git_urls_match(remote_url.trim(), normalized_url) {
-            bail!(
-                "shared repository mirror at {} has remote `{}` instead of `{}`",
-                mirror_path.display(),
-                remote_url.trim(),
-                normalized_url
-            );
-        }
+        if !bare || !remote_matches {
+            if !allow_network {
+                bail!(
+                    "shared repository mirror at {} is invalid or out of date",
+                    mirror_path.display()
+                );
+            }
 
-        if allow_network {
-            reporter.status(
-                "Updating",
-                format!("repository mirror for {normalized_url}"),
-            )?;
-            git_run(
-                mirror_path,
-                [
-                    "fetch",
-                    "--tags",
-                    "--prune",
-                    "origin",
-                    "+refs/heads/*:refs/heads/*",
-                ],
-            )?;
+            match fs::remove_dir_all(mirror_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to remove invalid shared repository mirror {}",
+                            mirror_path.display()
+                        )
+                    });
+                }
+            }
+        } else {
+            if allow_network {
+                reporter.status(
+                    "Updating",
+                    format!("repository mirror for {normalized_url}"),
+                )?;
+                git_run(
+                    mirror_path,
+                    [
+                        "fetch",
+                        "--tags",
+                        "--prune",
+                        "origin",
+                        "+refs/heads/*:refs/heads/*",
+                    ],
+                )?;
+            }
+            git_run(mirror_path, ["config", "core.autocrlf", "false"])?;
+            return Ok(());
         }
-        git_run(mirror_path, ["config", "core.autocrlf", "false"])?;
-        return Ok(());
     }
 
     if !allow_network {
@@ -1070,5 +1081,27 @@ mod tests {
                 .join("playbook-ios-3fbb5d0f")
                 .join("abc123def456")
         );
+    }
+
+    #[test]
+    fn recreates_invalid_shared_repository_mirrors() {
+        let cache_root = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_file(
+            &repo.path().join("skills/review/SKILL.md"),
+            "---\nname: Review\ndescription: Review code safely.\n---\n# Review\n",
+        );
+        init_git_repo(repo.path());
+
+        let url = repo.path().to_string_lossy().to_string();
+        let mirror_path = shared_repository_path(cache_root.path(), &url).unwrap();
+        fs::create_dir_all(&mirror_path).unwrap();
+        write_file(&mirror_path.join("README.txt"), "not a git repo\n");
+
+        let recreated =
+            prepare_repository_mirror(cache_root.path(), &url, true, &Reporter::silent()).unwrap();
+
+        assert_eq!(recreated, mirror_path);
+        assert!(is_bare_repository(&mirror_path).unwrap());
     }
 }

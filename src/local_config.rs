@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use path_slash::PathBufExt as _;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::display_path;
@@ -111,7 +112,7 @@ fn deserialize_repo_path<'de, D>(deserializer: D) -> Result<PathBuf, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    String::deserialize(deserializer).map(PathBuf::from)
+    String::deserialize(deserializer).map(PathBuf::from_slash)
 }
 
 #[cfg(test)]
