@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -169,58 +168,6 @@ struct SyncExecutionPlan {
     lockfile_write: Option<PlannedFileWrite>,
     warnings: Vec<String>,
     summary: SyncSummary,
-}
-
-#[allow(dead_code)]
-pub fn sync_with_adapters(
-    cache_root: &Path,
-    locked: bool,
-    allow_high_sensitivity: bool,
-    adapters: &[crate::adapters::Adapter],
-    sync_on_launch: bool,
-    reporter: &Reporter,
-) -> Result<SyncSummary> {
-    let cwd = env::current_dir().context("failed to determine the current directory")?;
-    sync_in_dir_with_adapters_mode(
-        &cwd,
-        cache_root,
-        if locked {
-            SyncMode::Locked
-        } else {
-            SyncMode::Normal
-        },
-        allow_high_sensitivity,
-        adapters,
-        sync_on_launch,
-        ExecutionMode::Apply,
-        None,
-        reporter,
-    )
-}
-
-#[allow(dead_code)]
-pub fn sync_in_dir(
-    cwd: &Path,
-    cache_root: &Path,
-    locked: bool,
-    allow_high_sensitivity: bool,
-    reporter: &Reporter,
-) -> Result<SyncSummary> {
-    sync_in_dir_with_adapters_mode(
-        cwd,
-        cache_root,
-        if locked {
-            SyncMode::Locked
-        } else {
-            SyncMode::Normal
-        },
-        allow_high_sensitivity,
-        &[],
-        false,
-        ExecutionMode::Apply,
-        None,
-        reporter,
-    )
 }
 
 pub fn sync_in_dir_with_adapters(
@@ -677,12 +624,6 @@ fn planned_write_preview_change(write: &PlannedFileWrite) -> PreviewChange {
     } else {
         PreviewChange::Write(write.path.clone())
     }
-}
-
-#[allow(dead_code)]
-pub fn doctor(cache_root: &Path, reporter: &Reporter) -> Result<DoctorSummary> {
-    let cwd = env::current_dir().context("failed to determine the current directory")?;
-    doctor_in_dir(&cwd, cache_root, reporter)
 }
 
 #[cfg(test)]
@@ -1874,7 +1815,15 @@ mod tests {
         allow_high_sensitivity: bool,
     ) -> Result<SyncSummary> {
         let reporter = Reporter::silent();
-        super::sync_in_dir(cwd, cache_root, locked, allow_high_sensitivity, &reporter)
+        super::sync_in_dir_with_adapters(
+            cwd,
+            cache_root,
+            locked,
+            allow_high_sensitivity,
+            &[],
+            false,
+            &reporter,
+        )
     }
 
     fn sync_in_dir_frozen(
@@ -3069,7 +3018,16 @@ sync_on_startup = true
 
         let buffer = SharedBuffer::default();
         let reporter = Reporter::sink(ColorMode::Never, buffer.clone());
-        super::sync_in_dir(temp.path(), cache.path(), false, false, &reporter).unwrap();
+        super::sync_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            false,
+            false,
+            &[],
+            false,
+            &reporter,
+        )
+        .unwrap();
 
         let output = buffer.contents();
         assert!(output.contains("launch sync is not emitted for `agents`"));

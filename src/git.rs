@@ -56,27 +56,6 @@ impl GitCheckout {
     }
 }
 
-#[allow(dead_code)]
-pub fn add_dependency_with_adapters(
-    cache_root: &Path,
-    url: &str,
-    options: AddDependencyOptions<'_>,
-    reporter: &Reporter,
-) -> Result<AddSummary> {
-    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    add_dependency_in_dir_with_adapters(&cwd, cache_root, url, options, reporter)
-}
-
-#[allow(dead_code)]
-pub fn remove_dependency(
-    cache_root: &Path,
-    package: &str,
-    reporter: &Reporter,
-) -> Result<RemoveSummary> {
-    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    remove_dependency_in_dir(&cwd, cache_root, package, reporter)
-}
-
 pub fn add_dependency_in_dir_with_adapters(
     project_root: &Path,
     cache_root: &Path,
@@ -399,7 +378,6 @@ pub fn resolve_ref_to_rev(path: &Path, git_ref: &str) -> Result<String> {
     git_output(path, ["rev-parse", &format!("{git_ref}^{{commit}}")])
 }
 
-#[allow(dead_code)]
 pub fn latest_tag(path: &Path) -> Result<String> {
     latest_tag_name(path)?.ok_or_else(|| anyhow!("no git tags found in {}", path.display()))
 }

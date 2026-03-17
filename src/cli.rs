@@ -1199,7 +1199,16 @@ justification = "Run checks."
         fs::create_dir_all(temp.path().join(".codex")).unwrap();
 
         let reporter = Reporter::silent();
-        resolver::sync_in_dir(temp.path(), cache.path(), false, false, &reporter).unwrap();
+        resolver::sync_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            false,
+            false,
+            &[],
+            false,
+            &reporter,
+        )
+        .unwrap();
 
         let output = run_command_output(Command::Doctor, temp.path(), cache.path());
 

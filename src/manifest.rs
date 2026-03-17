@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashSet};
-use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -189,12 +188,6 @@ struct ClaudePluginMetadata {
     version: Option<String>,
 }
 
-#[allow(dead_code)]
-pub fn scaffold_init(reporter: &Reporter) -> Result<InitSummary> {
-    let cwd = env::current_dir().context("failed to determine the current directory")?;
-    scaffold_init_in_dir(&cwd, reporter)
-}
-
 pub fn scaffold_init_in_dir(root: &Path, reporter: &Reporter) -> Result<InitSummary> {
     scaffold_init_in_dir_mode(root, ExecutionMode::Apply, reporter)
 }
@@ -283,13 +276,6 @@ pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
 
     loaded.validate(role)?;
     Ok(loaded)
-}
-
-#[allow(dead_code)]
-pub fn write_manifest(path: &Path, manifest: &Manifest) -> Result<()> {
-    let contents = serialize_manifest(manifest)?;
-    crate::store::write_atomic(path, contents.as_bytes())
-        .with_context(|| format!("failed to write manifest {}", path.display()))
 }
 
 pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::{Capability, DependencyComponent};
+#[cfg(test)]
 use crate::store::write_atomic;
 
 pub const LOCKFILE_NAME: &str = "nodus.lock";
@@ -87,7 +88,7 @@ impl Lockfile {
             .with_context(|| format!("failed to parse lockfile {}", path.display()))
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn write(&self, path: &Path) -> Result<()> {
         let contents = toml::to_string_pretty(self).context("failed to serialize lockfile")?;
         write_atomic(path, contents.as_bytes())

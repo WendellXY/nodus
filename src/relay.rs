@@ -1533,10 +1533,12 @@ target = ".github/prompts/review.md"
             "\nPending relay change.\n",
         );
 
-        let sync_error = crate::resolver::sync_in_dir(
+        let sync_error = crate::resolver::sync_in_dir_with_adapters(
             project.path(),
             cache.path(),
             false,
+            false,
+            &[],
             false,
             &Reporter::silent(),
         )
@@ -1593,10 +1595,12 @@ target = ".github/prompts/review.md"
             "---\nname: Root Review\ndescription: Example.\n---\n# Root Review\n",
         );
 
-        crate::resolver::sync_in_dir(
+        crate::resolver::sync_in_dir_with_adapters(
             project.path(),
             cache.path(),
             false,
+            false,
+            &[],
             false,
             &Reporter::silent(),
         )

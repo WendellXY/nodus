@@ -9,11 +9,11 @@ use crate::execution::PreviewChange;
 
 const LABEL_WIDTH: usize = 12;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ColorMode {
     #[default]
     Auto,
+    #[cfg(test)]
     Always,
     Never,
 }
@@ -22,6 +22,7 @@ impl ColorMode {
     fn choice(self) -> ColorChoice {
         match self {
             Self::Auto => ColorChoice::Auto,
+            #[cfg(test)]
             Self::Always => ColorChoice::Always,
             Self::Never => ColorChoice::Never,
         }
@@ -43,14 +44,22 @@ impl Reporter {
         }
     }
 
-    pub fn sink(mode: ColorMode, writer: impl Write + 'static) -> Self {
+    pub fn sink(_mode: ColorMode, writer: impl Write + 'static) -> Self {
         Self {
             writer: RefCell::new(Box::new(writer)),
-            color_enabled: matches!(mode, ColorMode::Always),
+            color_enabled: {
+                #[cfg(test)]
+                if matches!(_mode, ColorMode::Always) {
+                    true
+                } else {
+                    false
+                }
+                #[cfg(not(test))]
+                false
+            },
         }
     }
 
-    #[allow(dead_code)]
     pub fn silent() -> Self {
         Self::sink(ColorMode::Never, io::sink())
     }

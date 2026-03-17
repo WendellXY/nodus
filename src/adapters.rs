@@ -72,7 +72,6 @@ impl Adapter {
 pub struct Adapters(u8);
 
 impl Adapters {
-    #[allow(dead_code)]
     pub const NONE: Self = Self(0);
     pub const AGENTS: Self = Self(Adapter::Agents.bit());
     pub const CLAUDE: Self = Self(Adapter::Claude.bit());
@@ -88,7 +87,7 @@ impl Adapters {
         Self(self.0 | other.0)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub const fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
     }
@@ -110,7 +109,6 @@ impl Adapters {
         self.iter().collect()
     }
 
-    #[allow(dead_code)]
     pub fn iter(self) -> impl Iterator<Item = Adapter> {
         Adapter::ALL
             .into_iter()
