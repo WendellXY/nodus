@@ -114,6 +114,11 @@ enum Command {
         package: String,
         #[arg(long, help = "Local checkout path to persist and relay into")]
         repo_path: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Keep watching managed outputs and relay new edits automatically"
+        )]
+        watch: bool,
     },
     #[command(about = "Create a minimal nodus.toml and example skill")]
     Init,
@@ -294,21 +299,35 @@ fn run_command_in_dir(
             ))?;
             Ok(())
         }
-        Command::Relay { package, repo_path } => {
-            let summary = crate::relay::relay_dependency_in_dir(
-                cwd,
-                cache_root,
-                &package,
-                repo_path.as_deref(),
-                reporter,
-            )?;
-            reporter.finish(format!(
-                "relayed {} into {}; updated {} source files",
-                summary.alias,
-                display_path(&summary.linked_repo),
-                summary.updated_file_count,
-            ))?;
-            Ok(())
+        Command::Relay {
+            package,
+            repo_path,
+            watch,
+        } => {
+            if watch {
+                crate::relay::watch_dependency_in_dir(
+                    cwd,
+                    cache_root,
+                    &package,
+                    repo_path.as_deref(),
+                    reporter,
+                )
+            } else {
+                let summary = crate::relay::relay_dependency_in_dir(
+                    cwd,
+                    cache_root,
+                    &package,
+                    repo_path.as_deref(),
+                    reporter,
+                )?;
+                reporter.finish(format!(
+                    "relayed {} into {}; updated {} source files",
+                    summary.alias,
+                    display_path(&summary.linked_repo),
+                    summary.updated_file_count,
+                ))?;
+                Ok(())
+            }
         }
         Command::Sync {
             locked,
@@ -557,13 +576,19 @@ mod tests {
             "wenext-limited/playbook-ios",
             "--repo-path",
             "/tmp/playbook-ios",
+            "--watch",
         ])
         .unwrap();
 
         match cli.command {
-            Command::Relay { package, repo_path } => {
+            Command::Relay {
+                package,
+                repo_path,
+                watch,
+            } => {
                 assert_eq!(package, "wenext-limited/playbook-ios");
                 assert_eq!(repo_path.as_deref(), Some(Path::new("/tmp/playbook-ios")));
+                assert!(watch);
             }
             other => panic!("expected relay command, got {other:?}"),
         }

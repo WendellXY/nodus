@@ -414,7 +414,7 @@ nodus info obra/superpowers --branch main
 ### `nodus relay`
 
 ```bash
-nodus relay <dependency> [--repo-path <path>]
+nodus relay <dependency> [--repo-path <path>] [--watch]
 ```
 
 把 `.codex/`、`.claude/`、`.cursor/`、`.agents/`、`.opencode/` 等受管理运行时目录中的修改，回写到你本地维护的直接 Git 依赖检出。
@@ -427,12 +427,14 @@ nodus relay <dependency> [--repo-path <path>]
 - 自动写入 `.nodus/.gitignore`，保证该本地关联配置默认不纳入版本控制
 - 会校验关联检出是 Git 仓库，且其 `origin` 与依赖 URL 一致
 - 只把变更过的源文件写回本地检出，不会自动 commit 或 push
+- 配合 `--watch` 使用时，会持续轮询受管理输出，并在检测到新修改后自动回写，直到你主动停止命令
 - 如果多个受管理变体的内容不一致，或关联源码与受管理输出都偏离了锁定基线，则会失败
 
 示例：
 
 ```bash
 nodus relay superpowers --repo-path ../superpowers
+nodus relay superpowers --watch
 ```
 
 ### `nodus sync`

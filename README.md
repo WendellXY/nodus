@@ -436,7 +436,7 @@ Behavior:
 ### `nodus relay`
 
 ```bash
-nodus relay <dependency> [--repo-path <path>]
+nodus relay <dependency> [--repo-path <path>] [--watch]
 ```
 
 Relays edits from managed runtime outputs like `.codex/`, `.claude/`, `.cursor/`, `.agents/`, and `.opencode/` back into a maintainer-owned local checkout of the direct Git dependency.
@@ -449,12 +449,14 @@ Behavior:
 - writes `.nodus/.gitignore` so the local relay config stays untracked
 - validates that the linked checkout is a Git repo whose `origin` matches the dependency URL
 - writes only changed source files into the linked checkout; it does not commit or push
+- with `--watch`, keeps polling the managed outputs and relays new edits automatically until you stop the command
 - fails when managed variants disagree or when both the linked source and managed output changed since the locked baseline
 
 Example:
 
 ```bash
 nodus relay superpowers --repo-path ../superpowers
+nodus relay superpowers --watch
 ```
 
 ### `nodus sync`

@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use sha2::{Digest, Sha256};
 
 use crate::adapters::{Adapter, Adapters, ArtifactKind, managed_artifact_path, managed_skill_root};
 use crate::git::{
@@ -10,7 +13,8 @@ use crate::git::{
     resolve_dependency_alias,
 };
 use crate::local_config::{LocalConfig, RelayLink};
-use crate::manifest::{DependencySourceKind, SkillEntry, load_root_from_dir};
+use crate::lockfile::LOCKFILE_NAME;
+use crate::manifest::{DependencySourceKind, MANIFEST_FILE, SkillEntry, load_root_from_dir};
 use crate::report::Reporter;
 use crate::resolver::{
     PackageSource, ResolvedPackage, resolve_project_from_current_lockfile_in_dir,
@@ -62,6 +66,36 @@ struct RelayPlan {
     updates: BTreeMap<PathBuf, Vec<u8>>,
     noops: BTreeSet<PathBuf>,
     conflicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RelayWatchState {
+    config: BTreeMap<PathBuf, PathFingerprint>,
+    managed: BTreeMap<PathBuf, PathFingerprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PathFingerprint {
+    Missing,
+    Directory,
+    File([u8; 32]),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RelayWatchOptions {
+    poll_interval: Duration,
+    max_events: Option<usize>,
+    max_polls: Option<usize>,
+}
+
+impl Default for RelayWatchOptions {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(1),
+            max_events: None,
+            max_polls: None,
+        }
+    }
 }
 
 pub fn relay_dependency_in_dir(
@@ -121,6 +155,24 @@ pub fn relay_dependency_in_dir(
         linked_repo,
         updated_file_count: plan.updates.len(),
     })
+}
+
+pub fn watch_dependency_in_dir(
+    project_root: &Path,
+    cache_root: &Path,
+    package: &str,
+    repo_path_override: Option<&Path>,
+    reporter: &Reporter,
+) -> Result<()> {
+    watch_dependency_in_dir_with_options(
+        project_root,
+        cache_root,
+        package,
+        repo_path_override,
+        reporter,
+        RelayWatchOptions::default(),
+    )
+    .map(|_| ())
 }
 
 pub fn ensure_no_pending_relay_edits_in_dir(project_root: &Path, cache_root: &Path) -> Result<()> {
@@ -439,6 +491,148 @@ fn build_relay_plan(
     Ok(plan)
 }
 
+fn watch_dependency_in_dir_with_options(
+    project_root: &Path,
+    cache_root: &Path,
+    package: &str,
+    repo_path_override: Option<&Path>,
+    reporter: &Reporter,
+    options: RelayWatchOptions,
+) -> Result<Vec<RelaySummary>> {
+    let initial = relay_dependency_in_dir(
+        project_root,
+        cache_root,
+        package,
+        repo_path_override,
+        reporter,
+    )?;
+    reporter.finish(format!(
+        "relayed {} into {}; updated {} source files",
+        initial.alias,
+        display_relative(project_root, &initial.linked_repo),
+        initial.updated_file_count,
+    ))?;
+    let mut summaries = vec![initial];
+    let mut state = capture_watch_state(project_root, cache_root, package, reporter)?;
+    reporter.note("watching managed outputs for changes; press Ctrl-C to stop")?;
+    let mut polls = 0usize;
+
+    loop {
+        if options
+            .max_events
+            .is_some_and(|max_events| summaries.len() >= max_events)
+        {
+            return Ok(summaries);
+        }
+        if options
+            .max_polls
+            .is_some_and(|max_polls| polls >= max_polls)
+        {
+            return Ok(summaries);
+        }
+
+        thread::sleep(options.poll_interval);
+        polls += 1;
+
+        let next_state = capture_watch_state(project_root, cache_root, package, reporter)?;
+        let config_changed = next_state.config != state.config;
+        let managed_changed = next_state.managed != state.managed;
+        if !config_changed && !managed_changed {
+            continue;
+        }
+
+        state = next_state;
+        if !managed_changed {
+            reporter.note("reloaded relay watch inputs")?;
+            continue;
+        }
+
+        reporter.status("Watching", format!("detected managed edits for {package}"))?;
+        let summary = relay_dependency_in_dir(project_root, cache_root, package, None, reporter)?;
+        reporter.finish(format!(
+            "relayed {} into {}; updated {} source files",
+            summary.alias,
+            display_relative(project_root, &summary.linked_repo),
+            summary.updated_file_count,
+        ))?;
+        summaries.push(summary);
+        state = capture_watch_state(project_root, cache_root, package, reporter)?;
+    }
+}
+
+fn capture_watch_state(
+    project_root: &Path,
+    cache_root: &Path,
+    package: &str,
+    reporter: &Reporter,
+) -> Result<RelayWatchState> {
+    let workspace = load_workspace(project_root, cache_root, reporter)?;
+    let dependency = dependency_context(&workspace, package)?;
+    let linked_repo = resolve_existing_link(&workspace.local_config, &dependency)?;
+    let mappings = build_mappings(
+        &dependency,
+        &workspace.project_root,
+        workspace.selected_adapters,
+        &linked_repo,
+    )?;
+
+    let mut managed = BTreeMap::new();
+    for path in mappings.into_iter().map(|mapping| mapping.managed_path) {
+        managed
+            .entry(path.clone())
+            .or_insert(path_fingerprint(&path)?);
+    }
+
+    let adapter_markers = [
+        ".agents",
+        ".claude",
+        ".codex",
+        ".cursor",
+        ".opencode",
+        "AGENTS.md",
+    ];
+    let mut config = BTreeMap::new();
+    for path in [
+        project_root.join(MANIFEST_FILE),
+        project_root.join(LOCKFILE_NAME),
+        crate::local_config::config_path(project_root),
+    ] {
+        config.insert(path.clone(), path_fingerprint(&path)?);
+    }
+    for marker in adapter_markers {
+        let path = project_root.join(marker);
+        config.insert(path.clone(), path_fingerprint(&path)?);
+    }
+
+    Ok(RelayWatchState { config, managed })
+}
+
+fn path_fingerprint(path: &Path) -> Result<PathFingerprint> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PathFingerprint::Missing);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+
+    if metadata.is_dir() {
+        return Ok(PathFingerprint::Directory);
+    }
+    if !metadata.is_file() {
+        return Ok(PathFingerprint::Missing);
+    }
+
+    let contents = fs::read(path)
+        .with_context(|| format!("failed to read watched file {}", path.display()))?;
+    let digest = Sha256::digest(contents);
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&digest);
+    Ok(PathFingerprint::File(hash))
+}
+
 fn build_mappings(
     dependency: &DependencyContext,
     project_root: &Path,
@@ -707,14 +901,38 @@ fn display_relative(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::Write;
+    use std::io::{self, Write};
     use std::process::Command;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     use tempfile::TempDir;
 
     use super::*;
     use crate::adapters::managed_artifact_path;
     use crate::git::{AddDependencyOptions, add_dependency_in_dir_with_adapters};
+    use crate::report::ColorMode;
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -1250,5 +1468,68 @@ target = ".github/prompts/review.md"
         .unwrap_err()
         .to_string();
         assert!(remove_error.contains("pending relay edits"));
+    }
+
+    #[test]
+    fn relay_watch_syncs_follow_up_managed_edits() {
+        let (_remote_root, remote_repo) = create_remote_dependency();
+        let linked = clone_linked_repo(&remote_repo);
+        let linked_repo = linked.path().join("linked");
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        install_dependency(
+            project.path(),
+            cache.path(),
+            &remote_repo,
+            &[Adapter::Codex],
+        );
+
+        let package = resolved_package(project.path(), cache.path(), &[Adapter::Codex]);
+        let managed_skill =
+            managed_skill_root(project.path(), Adapter::Codex, &package, "review").join("SKILL.md");
+
+        let project_root = project.path().to_path_buf();
+        let cache_root = cache.path().to_path_buf();
+        let linked_repo_for_watch = linked_repo.clone();
+        let output = SharedBuffer::default();
+        let output_for_watch = output.clone();
+        let watch_handle = thread::spawn(move || {
+            watch_dependency_in_dir_with_options(
+                &project_root,
+                &cache_root,
+                "playbook_ios",
+                Some(&linked_repo_for_watch),
+                &Reporter::sink(ColorMode::Never, output_for_watch),
+                RelayWatchOptions {
+                    poll_interval: Duration::from_millis(20),
+                    max_events: Some(2),
+                    max_polls: Some(200),
+                },
+            )
+            .unwrap()
+        });
+
+        let mut ready = false;
+        for _ in 0..100 {
+            if output
+                .contents()
+                .contains("watching managed outputs for changes")
+            {
+                ready = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready, "watcher never reported readiness");
+        append_file(&managed_skill, "\nWatched relay update.\n");
+
+        let summaries = watch_handle.join().unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[1].updated_file_count, 1);
+        assert!(
+            fs::read_to_string(linked_repo.join("skills/review/SKILL.md"))
+                .unwrap()
+                .ends_with("\nWatched relay update.\n")
+        );
     }
 }
