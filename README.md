@@ -258,6 +258,23 @@ You can also pin a dependency to an exact Git commit:
 superpowers = { github = "obra/superpowers", revision = "0123456789abcdef0123456789abcdef01234567" }
 ```
 
+You can also declare direct managed file or directory mappings for a root-manifest dependency:
+
+```toml
+[dependencies.shared]
+path = "vendor/shared"
+
+[[dependencies.shared.managed]]
+source = "prompts/review.md"
+target = ".github/prompts/review.md"
+
+[[dependencies.shared.managed]]
+source = "templates"
+target = "docs/templates"
+```
+
+`managed.source` is resolved relative to the dependency root. `managed.target` is resolved relative to the consuming repo root. Both paths must be relative, and `managed` is supported only for direct dependencies declared in the root `nodus.toml`.
+
 Optional capabilities are still supported:
 
 ```toml
@@ -284,8 +301,13 @@ justification = "Run repository checks."
 - `dependencies.<alias>.revision`
 - `dependencies.<alias>.version`
 - `dependencies.<alias>.components`
+- `[[dependencies.<alias>.managed]]`
+- `dependencies.<alias>.managed.source`
+- `dependencies.<alias>.managed.target`
 
 Unknown manifest fields are ignored with warnings.
+
+For a fully commented example manifest, see [examples/nodus.toml](./examples/nodus.toml).
 
 ### Adapter Selection
 

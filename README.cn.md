@@ -258,6 +258,23 @@ axiom = { github = "CharlesWiltgen/Axiom", branch = "main", version = "2.34.0" }
 superpowers = { github = "obra/superpowers", revision = "0123456789abcdef0123456789abcdef01234567" }
 ```
 
+你也可以为根清单中的直接依赖声明托管文件或目录映射：
+
+```toml
+[dependencies.shared]
+path = "vendor/shared"
+
+[[dependencies.shared.managed]]
+source = "prompts/review.md"
+target = ".github/prompts/review.md"
+
+[[dependencies.shared.managed]]
+source = "templates"
+target = "docs/templates"
+```
+
+`managed.source` 相对于依赖根目录解析，`managed.target` 相对于消费仓库根目录解析。两者都必须是相对路径，并且 `managed` 仅支持在根 `nodus.toml` 中声明的直接依赖。
+
 可选能力仍然受支持：
 
 ```toml
@@ -284,8 +301,13 @@ justification = "Run repository checks."
 - `dependencies.<alias>.revision`
 - `dependencies.<alias>.version`
 - `dependencies.<alias>.components`
+- `[[dependencies.<alias>.managed]]`
+- `dependencies.<alias>.managed.source`
+- `dependencies.<alias>.managed.target`
 
 未知的清单字段会被忽略，并给出警告。
+
+如果你想看带详细注释的完整示例清单，可以参考 [examples/nodus.toml](./examples/nodus.toml)。
 
 ### 适配器选择
 

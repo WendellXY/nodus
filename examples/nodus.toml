@@ -1,0 +1,116 @@
+# Example `nodus.toml`
+#
+# This file is intentionally verbose. It shows the real manifest shape Nodus
+# understands today and explains when to use each field.
+#
+# You can start smaller than this. In practice, most consumers only need:
+# - `[adapters] enabled = [...]`
+# - one or more entries under `[dependencies]`
+
+# Optional manifest version string for your package or workspace metadata.
+# Leave it out if you do not need it.
+api_version = "1"
+
+# Optional human-readable package or workspace name.
+name = "acme-agent-workspace"
+
+# Optional semantic version for the root package itself.
+# This is metadata only; dependency pinning still happens per dependency below.
+version = "0.1.0"
+
+[adapters]
+# Pick the runtime folders Nodus should manage in this repo.
+# Supported values: "agents", "claude", "codex", "cursor", "opencode"
+#
+# Nodus emits only the files needed for the adapters you enable here.
+# If you omit this section, Nodus can infer adapters from the repo layout,
+# but persisting them keeps sync behavior deterministic in CI and teammates'
+# local clones.
+enabled = ["codex", "claude", "opencode"]
+
+[[capabilities]]
+# Optional capability declarations for the root package.
+# Use these only if this repo itself is a package that exposes tools or actions.
+id = "shell.exec"
+
+# Keep sensitivity low unless the capability truly needs elevated trust.
+# Packages that declare "high" sensitivity require explicit approval at sync time.
+sensitivity = "high"
+justification = "Run repository checks and maintenance commands."
+
+# -----------------------------------------------------------------------------
+# Dependency examples
+# -----------------------------------------------------------------------------
+#
+# A dependency alias is your local name for a package.
+# Use a short, stable alias because commands like `nodus remove <alias>` and
+# `nodus relay <alias>` refer to it.
+#
+# For each dependency, choose exactly one source:
+# - `github = "owner/repo"` for a GitHub repository
+# - `url = "https://..."` or another Git URL
+# - `path = "relative/path"` for a local checkout
+#
+# For Git dependencies, choose exactly one ref:
+# - `tag = "v1.2.3"` for release-style pinning
+# - `branch = "main"` for a moving branch head
+# - `revision = "<40-char commit sha>"` for an exact commit
+
+[dependencies]
+# This inline-table form is the most common and compact way to declare
+# dependencies. It is a good default when you just need to pin packages and do
+# not need nested `managed` mappings.
+
+# Common case: consume a GitHub package by tag.
+playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.6.0" }
+
+# Common case: install only a subset of artifact kinds from a dependency.
+# Supported values: "skills", "agents", "rules", "commands"
+review = { github = "obra/superpowers", tag = "v1.4.2", components = ["skills", "rules"] }
+
+# Common case: local path dependency relative to the repo root.
+local_playbook = { path = "vendor/playbook" }
+
+# Common case: follow a branch head, while optionally keeping the package's own
+# semantic version metadata in the manifest.
+axiom = { github = "CharlesWiltgen/Axiom", branch = "main", version = "2.34.0" }
+
+[dependencies.shared]
+# Use the expanded table form when you want more room for comments or when you
+# need nested configuration such as `[[dependencies.<alias>.managed]]`.
+#
+# This local dependency also contributes extra files outside adapter-managed
+# runtime folders.
+path = "vendor/shared"
+
+[[dependencies.shared.managed]]
+# Copy a single file from the dependency into the consuming repo.
+#
+# `source` is relative to the dependency root.
+# `target` is relative to the consuming repo root.
+# Both paths must be relative. Absolute paths and `..` are rejected.
+source = "prompts/review.md"
+target = ".github/prompts/review.md"
+
+[[dependencies.shared.managed]]
+# Copy an entire directory tree. Files already tracked by Nodus at this target
+# can be updated or pruned later; unrelated unmanaged files are protected.
+source = "templates"
+target = "docs/templates"
+
+# Important `managed` rules:
+# - supported only for direct dependencies declared in the root `nodus.toml`
+# - source paths must stay inside the dependency root
+# - overlapping managed targets are rejected
+# - unmanaged file collisions are rejected instead of overwritten
+
+# [dependencies.exact_pin]
+# Uncomment this style when you want a Git dependency fixed to one exact commit.
+# This expanded form is equivalent to the inline-table form under `[dependencies]`.
+# url = "https://github.com/acme/example-package.git"
+# revision = "0123456789abcdef0123456789abcdef01234567"
+
+# [launch_hooks]
+# Uncomment only if you want compatible adapters to auto-run sync on startup.
+# Current manifest validation requires this to be `true` when set.
+# sync_on_startup = true
