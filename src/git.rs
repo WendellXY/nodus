@@ -11,6 +11,7 @@ use crate::manifest::{
     DependencyComponent, DependencySpec, MANIFEST_FILE, PackageRole, RequestedGitRef,
     load_dependency_from_dir, load_from_dir, normalize_dependency_alias,
 };
+use crate::paths::display_path;
 use crate::report::Reporter;
 use crate::resolver::sync_in_dir_with_loaded_root;
 use crate::selection::{resolve_adapter_selection, should_prompt_for_adapter};
@@ -518,9 +519,14 @@ pub fn git_urls_match(left: &str, right: &str) -> bool {
 
     match (github_slug_from_url(&left), github_slug_from_url(&right)) {
         (Some(left), Some(right)) => left == right,
-        _ => canonical_local_git_path(&left)
-            .zip(canonical_local_git_path(&right))
-            .is_some_and(|(left, right)| left == right),
+        _ => {
+            local_git_identity(&left)
+                .zip(local_git_identity(&right))
+                .is_some_and(|(left, right)| left == right)
+                || canonical_local_git_path(&left)
+                    .zip(canonical_local_git_path(&right))
+                    .is_some_and(|(left, right)| left == right)
+        }
     }
 }
 
@@ -557,6 +563,16 @@ fn canonical_local_git_path(url: &str) -> Option<PathBuf> {
         .and_then(|path| dunce::canonicalize(path).ok())
 }
 
+fn local_git_identity(url: &str) -> Option<String> {
+    if !looks_like_local_path(url) {
+        return None;
+    }
+
+    let git_dir = git_output(Path::new(url), ["rev-parse", "--absolute-git-dir"]).ok()?;
+    let canonical = dunce::canonicalize(git_dir.trim()).ok()?;
+    Some(display_path(&canonical).to_ascii_lowercase())
+}
+
 fn looks_like_local_path(value: &str) -> bool {
     value.starts_with('/')
         || value.starts_with("./")
@@ -585,7 +601,7 @@ fn ensure_shared_repository(
         }
 
         let remote_url = git_output(mirror_path, ["remote", "get-url", "origin"])?;
-        if remote_url.trim() != normalized_url {
+        if !git_urls_match(remote_url.trim(), normalized_url) {
             bail!(
                 "shared repository mirror at {} has remote `{}` instead of `{}`",
                 mirror_path.display(),
@@ -635,6 +651,8 @@ fn ensure_shared_repository(
     git_run(
         parent,
         [
+            "-c",
+            "core.autocrlf=false",
             "clone",
             "--bare",
             normalized_url,
@@ -655,7 +673,17 @@ fn ensure_shared_checkout(
     if checkout_path.exists() {
         validate_shared_checkout(checkout_path, mirror_path, normalized_url)?;
         git_run(checkout_path, ["config", "core.autocrlf", "false"])?;
-        git_run(checkout_path, ["checkout", "--detach", "--force", rev])?;
+        git_run(
+            checkout_path,
+            [
+                "-c",
+                "core.autocrlf=false",
+                "checkout",
+                "--detach",
+                "--force",
+                rev,
+            ],
+        )?;
         return Ok(());
     }
 
@@ -685,6 +713,8 @@ fn ensure_shared_checkout(
     git_run(
         mirror_path,
         [
+            "-c",
+            "core.autocrlf=false",
             "worktree",
             "add",
             "--detach",
@@ -700,7 +730,17 @@ fn ensure_shared_checkout(
         )
     })?;
     git_run(checkout_path, ["config", "core.autocrlf", "false"])?;
-    git_run(checkout_path, ["checkout", "--detach", "--force", rev])
+    git_run(
+        checkout_path,
+        [
+            "-c",
+            "core.autocrlf=false",
+            "checkout",
+            "--detach",
+            "--force",
+            rev,
+        ],
+    )
 }
 
 fn short_display_rev(rev: &str) -> String {
@@ -713,7 +753,7 @@ pub fn validate_shared_checkout(
     normalized_url: &str,
 ) -> Result<()> {
     let remote_url = git_output(checkout_path, ["remote", "get-url", "origin"])?;
-    if remote_url.trim() != normalized_url {
+    if !git_urls_match(remote_url.trim(), normalized_url) {
         bail!(
             "dependency checkout at {} has remote `{}` instead of `{}`",
             checkout_path.display(),
@@ -820,6 +860,7 @@ mod tests {
         run(&["init"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test User"]);
+        write_file(&path.join(".gitattributes"), "* text eol=lf\n");
         run(&["add", "."]);
         run(&["commit", "-m", "initial"]);
     }

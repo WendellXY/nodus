@@ -1055,6 +1055,7 @@ mod tests {
         run_git(path, &["config", "user.email", "test@example.com"]);
         run_git(path, &["config", "user.name", "Test User"]);
         run_git(path, &["config", "core.autocrlf", "false"]);
+        write_file(&path.join(".gitattributes"), "* text eol=lf\n");
         run_git(path, &["add", "."]);
         run_git(path, &["commit", "-m", "initial"]);
     }
