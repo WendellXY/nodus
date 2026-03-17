@@ -706,6 +706,8 @@ mod tests {
         run(&["init"]);
         run(&["config", "user.email", "test@example.com"]);
         run(&["config", "user.name", "Test User"]);
+        run(&["config", "core.autocrlf", "false"]);
+        write_file(&path.join(".gitattributes"), "* text eol=lf\n");
         run(&["add", "."]);
         run(&["commit", "-m", "initial"]);
     }

@@ -660,20 +660,32 @@ fn ensure_shared_checkout(
     reporter: &Reporter,
 ) -> Result<()> {
     if checkout_path.exists() {
-        validate_shared_checkout(checkout_path, mirror_path, normalized_url)?;
-        git_run(checkout_path, ["config", "core.autocrlf", "false"])?;
-        git_run(
-            checkout_path,
-            [
-                "-c",
-                "core.autocrlf=false",
-                "checkout",
-                "--detach",
-                "--force",
-                rev,
-            ],
-        )?;
-        return Ok(());
+        match validate_shared_checkout(checkout_path, mirror_path, normalized_url) {
+            Ok(()) => {
+                git_run(checkout_path, ["config", "core.autocrlf", "false"])?;
+                git_run(
+                    checkout_path,
+                    [
+                        "-c",
+                        "core.autocrlf=false",
+                        "checkout",
+                        "--detach",
+                        "--force",
+                        rev,
+                    ],
+                )?;
+                return Ok(());
+            }
+            Err(error) if !allow_network => {
+                return Err(error).context(format!(
+                    "shared checkout at {} is invalid or out of date",
+                    checkout_path.display()
+                ));
+            }
+            Err(_) => {
+                remove_invalid_shared_checkout(checkout_path)?;
+            }
+        }
     }
 
     if !allow_network {
@@ -730,6 +742,19 @@ fn ensure_shared_checkout(
             rev,
         ],
     )
+}
+
+fn remove_invalid_shared_checkout(checkout_path: &Path) -> Result<()> {
+    match fs::remove_dir_all(checkout_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove invalid shared checkout {}",
+                checkout_path.display()
+            )
+        }),
+    }
 }
 
 fn short_display_rev(rev: &str) -> String {

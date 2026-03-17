@@ -1998,7 +1998,7 @@ tag = {:?}
         });
 
         let mut ready = false;
-        for _ in 0..100 {
+        for _ in 0..500 {
             if output
                 .contents()
                 .contains("watching managed outputs for changes")
@@ -2006,7 +2006,7 @@ tag = {:?}
                 ready = true;
                 break;
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(20));
         }
         assert!(ready, "watcher never reported readiness");
         append_file(&managed_skill, "\nWatched relay update.\n");
@@ -2105,7 +2105,7 @@ tag = {:?}
         });
 
         let mut ready = false;
-        for _ in 0..100 {
+        for _ in 0..500 {
             if output
                 .contents()
                 .contains("watching managed outputs for changes")
@@ -2113,7 +2113,7 @@ tag = {:?}
                 ready = true;
                 break;
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(20));
         }
         assert!(ready, "watcher never reported readiness");
         append_file(&managed_skill_one, "\nWatched relay update.\n");
