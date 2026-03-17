@@ -114,6 +114,18 @@ impl SyncMode {
     }
 }
 
+fn lockfile_out_of_date_message() -> String {
+    format!(
+        "{LOCKFILE_NAME} is out of date; run `nodus sync` to regenerate the lockfile and managed outputs, then run `nodus doctor` to verify the project state"
+    )
+}
+
+fn checked_sync_lockfile_out_of_date_message() -> String {
+    format!(
+        "{LOCKFILE_NAME} is out of date; run `nodus sync` without `--locked` or `--frozen` to regenerate the lockfile and managed outputs"
+    )
+}
+
 #[derive(Debug, Default)]
 struct ResolverState {
     stack: Vec<PathBuf>,
@@ -414,10 +426,7 @@ fn sync_in_dir_with_adapters_mode(
             );
         };
         if *existing != lockfile {
-            bail!(
-                "{} is out of date; run `nodus sync` without `--locked` or `--frozen` to regenerate it",
-                LOCKFILE_NAME,
-            );
+            bail!("{}", checked_sync_lockfile_out_of_date_message());
         }
     }
 
@@ -710,7 +719,7 @@ pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Resu
     let desired_paths = resolution.managed_paths(cwd, selected_adapters)?;
     let expected_lockfile = resolution.to_lockfile(selected_adapters)?;
     if existing_lockfile != expected_lockfile {
-        bail!("{LOCKFILE_NAME} is out of date");
+        bail!("{}", lockfile_out_of_date_message());
     }
     let owned_paths = load_owned_paths(cwd, Some(&existing_lockfile))?;
 
@@ -760,7 +769,7 @@ pub fn resolve_project_from_current_lockfile_in_dir(
     )?;
     let expected = resolution.to_lockfile(selected_adapters)?;
     if lockfile != expected {
-        bail!("{LOCKFILE_NAME} is out of date");
+        bail!("{}", lockfile_out_of_date_message());
     }
 
     Ok((resolution, lockfile))
@@ -1910,6 +1919,20 @@ mod tests {
     fn doctor_in_dir(cwd: &Path, cache_root: &Path) -> Result<DoctorSummary> {
         let reporter = Reporter::silent();
         super::doctor_in_dir(cwd, cache_root, &reporter)
+    }
+
+    fn resolve_project_from_current_lockfile_in_dir(
+        cwd: &Path,
+        cache_root: &Path,
+        adapters: &[Adapter],
+    ) -> Result<(Resolution, Lockfile)> {
+        let reporter = Reporter::silent();
+        super::resolve_project_from_current_lockfile_in_dir(
+            cwd,
+            cache_root,
+            Adapters::from_slice(adapters),
+            &reporter,
+        )
     }
 
     fn add_dependency_in_dir_with_adapters(
@@ -3739,7 +3762,8 @@ shared = { path = "vendor/shared", components = ["skills"] }
         let error = doctor_in_dir(temp.path(), cache.path())
             .unwrap_err()
             .to_string();
-        assert!(error.contains("nodus.lock is out of date"));
+        assert!(error.contains("run `nodus sync`"));
+        assert!(error.contains("run `nodus doctor`"));
     }
 
     #[test]
@@ -4366,7 +4390,25 @@ shared = { path = "vendor/shared" }
         let error = doctor_in_dir(temp.path(), cache.path())
             .unwrap_err()
             .to_string();
-        assert!(error.contains("out of date"));
+        assert!(error.contains("run `nodus sync`"));
+        assert!(error.contains("run `nodus doctor`"));
+    }
+
+    #[test]
+    fn current_lockfile_resolution_reports_actionable_lockfile_drift() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_skill(&temp.path().join("skills/review"), "Review");
+        sync_all(temp.path(), cache.path());
+
+        write_skill(&temp.path().join("skills/renamed"), "Renamed");
+
+        let error =
+            resolve_project_from_current_lockfile_in_dir(temp.path(), cache.path(), &Adapter::ALL)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("run `nodus sync`"));
+        assert!(error.contains("run `nodus doctor`"));
     }
 
     #[test]
