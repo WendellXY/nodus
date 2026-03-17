@@ -129,6 +129,7 @@ pub fn add_dependency_in_dir_with_adapters(
                 sorted.dedup();
                 sorted
             }),
+            managed: None,
         },
     );
     let selection = resolve_adapter_selection(
@@ -781,6 +782,7 @@ mod tests {
                 branch: None,
                 version: None,
                 components: None,
+                managed: None,
             },
         );
 
@@ -803,6 +805,7 @@ mod tests {
                 branch: None,
                 version: None,
                 components: None,
+                managed: None,
             },
         );
 

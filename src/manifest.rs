@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
@@ -75,6 +75,14 @@ pub struct DependencySpec {
     pub version: Option<Version>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<DependencyComponent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<Vec<ManagedPathSpec>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedPathSpec {
+    pub source: PathBuf,
+    pub target: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
@@ -323,37 +331,41 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
         }
         output.push_str("[dependencies]\n");
         for (alias, dependency) in &manifest.dependencies {
-            let mut fields = Vec::new();
-            if let Some(github) = &dependency.github {
-                fields.push(format!("github = {}", quote(github)));
+            if dependency.managed.is_some() {
+                continue;
             }
-            if let Some(url) = &dependency.url {
-                fields.push(format!("url = {}", quote(url)));
-            }
-            if let Some(path) = &dependency.path {
-                fields.push(format!(
-                    "path = {}",
-                    quote(&path.to_string_lossy().replace('\\', "/"))
-                ));
-            }
-            if let Some(tag) = &dependency.tag {
-                fields.push(format!("tag = {}", quote(tag)));
-            }
-            if let Some(branch) = &dependency.branch {
-                fields.push(format!("branch = {}", quote(branch)));
-            }
-            if let Some(version) = &dependency.version {
-                fields.push(format!("version = {}", quote(&version.to_string())));
-            }
-            if let Some(components) = dependency.explicit_components_sorted() {
-                let encoded = components
-                    .into_iter()
-                    .map(|component| quote(component.as_str()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                fields.push(format!("components = [{encoded}]"));
-            }
-            output.push_str(&format!("{alias} = {{ {} }}\n", fields.join(", ")));
+
+            output.push_str(&format!(
+                "{alias} = {{ {} }}\n",
+                dependency.inline_fields().join(", ")
+            ));
+        }
+    }
+
+    for (alias, dependency) in &manifest.dependencies {
+        let Some(managed) = &dependency.managed else {
+            continue;
+        };
+
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(&format!("[dependencies.{alias}]\n"));
+        for field in dependency.key_value_fields() {
+            output.push_str(&field);
+            output.push('\n');
+        }
+        for mapping in managed {
+            output.push('\n');
+            output.push_str(&format!("[[dependencies.{alias}.managed]]\n"));
+            output.push_str(&format!(
+                "source = {}\n",
+                quote(&display_path(&mapping.source))
+            ));
+            output.push_str(&format!(
+                "target = {}\n",
+                quote(&display_path(&mapping.target))
+            ));
         }
     }
 
@@ -446,19 +458,20 @@ impl LoadedManifest {
                 }
             }
 
-            let Some(components) = &dependency.components else {
-                continue;
-            };
-            if components.is_empty() {
-                bail!("dependency `{alias}` field `components` must not be empty");
+            if let Some(components) = &dependency.components {
+                if components.is_empty() {
+                    bail!("dependency `{alias}` field `components` must not be empty");
+                }
+
+                let mut sorted = components.clone();
+                sorted.sort();
+                sorted.dedup();
+                if sorted.len() != components.len() {
+                    bail!("dependency `{alias}` field `components` must not contain duplicates");
+                }
             }
 
-            let mut sorted = components.clone();
-            sorted.sort();
-            sorted.dedup();
-            if sorted.len() != components.len() {
-                bail!("dependency `{alias}` field `components` must not contain duplicates");
-            }
+            validate_dependency_managed_specs(alias, dependency.managed.as_deref())?;
         }
 
         Ok(())
@@ -539,6 +552,41 @@ impl Manifest {
 }
 
 impl DependencySpec {
+    pub fn inline_fields(&self) -> Vec<String> {
+        self.key_value_fields()
+    }
+
+    pub fn key_value_fields(&self) -> Vec<String> {
+        let mut fields = Vec::new();
+        if let Some(github) = &self.github {
+            fields.push(format!("github = {}", quote(github)));
+        }
+        if let Some(url) = &self.url {
+            fields.push(format!("url = {}", quote(url)));
+        }
+        if let Some(path) = &self.path {
+            fields.push(format!("path = {}", quote(&display_path(path))));
+        }
+        if let Some(tag) = &self.tag {
+            fields.push(format!("tag = {}", quote(tag)));
+        }
+        if let Some(branch) = &self.branch {
+            fields.push(format!("branch = {}", quote(branch)));
+        }
+        if let Some(version) = &self.version {
+            fields.push(format!("version = {}", quote(&version.to_string())));
+        }
+        if let Some(components) = self.explicit_components_sorted() {
+            let encoded = components
+                .into_iter()
+                .map(|component| quote(component.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            fields.push(format!("components = [{encoded}]"));
+        }
+        fields
+    }
+
     pub fn explicit_components_sorted(&self) -> Option<Vec<DependencyComponent>> {
         let mut components = self.components.clone()?;
         components.sort();
@@ -611,6 +659,20 @@ impl DependencySpec {
             (Some(_), Some(_)) => bail!("git dependency must not declare both `tag` and `branch`"),
             (None, None) => bail!("git dependency must declare `tag` or `branch`"),
         }
+    }
+
+    pub fn managed_mappings(&self) -> &[ManagedPathSpec] {
+        self.managed.as_deref().unwrap_or(&[])
+    }
+}
+
+impl ManagedPathSpec {
+    pub fn normalized_source(&self) -> Result<PathBuf> {
+        normalize_manifest_relative_path(&self.source, "managed source path")
+    }
+
+    pub fn normalized_target(&self) -> Result<PathBuf> {
+        normalize_manifest_relative_path(&self.target, "managed target path")
     }
 }
 
@@ -753,6 +815,7 @@ fn load_claude_marketplace_wrapper(loaded: &LoadedManifest) -> Result<Option<Loa
                     .clone()
                     .or_else(|| plugin_manifest.effective_version()),
                 components: None,
+                managed: None,
             },
         );
 
@@ -1010,6 +1073,60 @@ fn collect_ignored_field_warnings(table: &Table) -> Vec<String> {
     warnings
 }
 
+fn validate_dependency_managed_specs(
+    alias: &str,
+    managed: Option<&[ManagedPathSpec]>,
+) -> Result<()> {
+    let Some(managed) = managed else {
+        return Ok(());
+    };
+    if managed.is_empty() {
+        bail!("dependency `{alias}` field `managed` must not be empty");
+    }
+
+    let mut seen = HashSet::new();
+    for mapping in managed {
+        let normalized_source = mapping
+            .normalized_source()
+            .with_context(|| format!("dependency `{alias}` field `managed.source` is invalid"))?;
+        let normalized_target = mapping
+            .normalized_target()
+            .with_context(|| format!("dependency `{alias}` field `managed.target` is invalid"))?;
+        if !seen.insert((normalized_source, normalized_target)) {
+            bail!(
+                "dependency `{alias}` field `managed` must not contain duplicate source/target pairs"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_manifest_relative_path(value: &Path, label: &str) -> Result<PathBuf> {
+    if value.as_os_str().is_empty() {
+        bail!("{label} must not be empty");
+    }
+    if value.is_absolute() {
+        bail!("{label} must be relative");
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in value.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => bail!("{label} must not contain `..`"),
+            Component::RootDir | Component::Prefix(_) => bail!("{label} must be relative"),
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        bail!("{label} must not be empty");
+    }
+
+    Ok(normalized)
+}
+
 fn collect_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
@@ -1073,6 +1190,10 @@ fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
 
 fn default_manifest_contents() -> &'static str {
     ""
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn quote(value: &str) -> String {
@@ -1690,6 +1811,7 @@ playbook_ios = { github = "wenext-limited", tag = "v0.1.0" }
                     DependencyComponent::Rules,
                     DependencyComponent::Skills,
                 ]),
+                managed: None,
             },
         );
 
@@ -1701,6 +1823,43 @@ playbook_ios = { github = "wenext-limited", tag = "v0.1.0" }
         assert!(encoded.contains("version = \"0.1.0\""));
         assert!(encoded.contains("components = [\"skills\", \"rules\"]"));
         assert!(!encoded.contains("url = "));
+    }
+
+    #[test]
+    fn serializes_managed_dependencies_as_expanded_tables() {
+        let mut manifest = Manifest::default();
+        manifest.dependencies.insert(
+            "superpowers".into(),
+            DependencySpec {
+                github: Some("org/superpowers".into()),
+                url: None,
+                path: None,
+                tag: Some("v1.2.3".into()),
+                branch: None,
+                version: None,
+                components: None,
+                managed: Some(vec![
+                    ManagedPathSpec {
+                        source: PathBuf::from("prompts/review.md"),
+                        target: PathBuf::from(".github/prompts/review.md"),
+                    },
+                    ManagedPathSpec {
+                        source: PathBuf::from("templates"),
+                        target: PathBuf::from("docs/templates"),
+                    },
+                ]),
+            },
+        );
+
+        let encoded = serialize_manifest(&manifest).unwrap();
+
+        assert!(encoded.contains("[dependencies]"));
+        assert!(encoded.contains("[dependencies.superpowers]"));
+        assert!(encoded.contains("github = \"org/superpowers\""));
+        assert!(encoded.contains("[[dependencies.superpowers.managed]]"));
+        assert!(encoded.contains("source = \"prompts/review.md\""));
+        assert!(encoded.contains("target = \".github/prompts/review.md\""));
+        assert!(!encoded.contains("superpowers = {"));
     }
 
     #[test]
@@ -1807,6 +1966,7 @@ sync_on_startup = false
             branch: None,
             version: None,
             components: None,
+            managed: None,
         };
 
         let error = dependency.source_kind().unwrap_err().to_string();
@@ -1830,6 +1990,50 @@ playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0", compone
         assert_eq!(
             dependency.explicit_components_sorted().unwrap(),
             vec![DependencyComponent::Skills, DependencyComponent::Agents]
+        );
+    }
+
+    #[test]
+    fn parses_managed_dependency_tables() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies.superpowers]
+github = "org/superpowers"
+tag = "v1.2.3"
+
+[[dependencies.superpowers.managed]]
+source = "prompts/review.md"
+target = ".github/prompts/review.md"
+
+[[dependencies.superpowers.managed]]
+source = "templates"
+target = "docs/templates"
+"#,
+        );
+
+        let loaded = load_root_from_dir(temp.path()).unwrap();
+        let dependency = loaded.manifest.dependencies.get("superpowers").unwrap();
+        assert_eq!(
+            dependency.resolved_git_url().unwrap(),
+            "https://github.com/org/superpowers"
+        );
+        assert_eq!(dependency.managed_mappings().len(), 2);
+        assert_eq!(
+            dependency.managed_mappings()[0],
+            ManagedPathSpec {
+                source: PathBuf::from("prompts/review.md"),
+                target: PathBuf::from(".github/prompts/review.md"),
+            }
+        );
+        assert_eq!(
+            dependency.managed_mappings()[1],
+            ManagedPathSpec {
+                source: PathBuf::from("templates"),
+                target: PathBuf::from("docs/templates"),
+            }
         );
     }
 
@@ -1863,6 +2067,70 @@ playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0", compone
 
         let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
         assert!(error.contains("must not contain duplicates"));
+    }
+
+    #[test]
+    fn rejects_empty_dependency_managed_paths() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies.superpowers]
+github = "org/superpowers"
+tag = "v1.2.3"
+managed = []
+"#,
+        );
+
+        let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("field `managed` must not be empty"));
+    }
+
+    #[test]
+    fn rejects_duplicate_dependency_managed_pairs() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies.superpowers]
+github = "org/superpowers"
+tag = "v1.2.3"
+
+[[dependencies.superpowers.managed]]
+source = "prompts/review.md"
+target = "docs/review.md"
+
+[[dependencies.superpowers.managed]]
+source = "./prompts/review.md"
+target = "./docs/review.md"
+"#,
+        );
+
+        let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("must not contain duplicate source/target pairs"));
+    }
+
+    #[test]
+    fn rejects_dependency_managed_paths_with_parent_segments() {
+        let temp = TempDir::new().unwrap();
+        write_valid_skill(temp.path());
+        write_file(
+            &temp.path().join(MANIFEST_FILE),
+            r#"
+[dependencies.superpowers]
+github = "org/superpowers"
+tag = "v1.2.3"
+
+[[dependencies.superpowers.managed]]
+source = "../prompts/review.md"
+target = "docs/review.md"
+"#,
+        );
+
+        let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("managed.source"));
     }
 
     #[test]
