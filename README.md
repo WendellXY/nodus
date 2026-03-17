@@ -31,7 +31,7 @@ Point it at a GitHub repo or local path and Nodus will resolve the package, pin 
 
 ```bash
 nodus add obra/superpowers --adapter codex
-nodus add obra/superpowers --adapter codex --component skills
+nodus add obra/superpowers --adapter claude --component skills
 nodus info obra/superpowers
 nodus outdated
 nodus update
@@ -126,7 +126,7 @@ nodus add obra/superpowers --adapter codex
 To install only selected artifact kinds from that package:
 
 ```bash
-nodus add obra/superpowers --adapter codex --component skills --component rules
+nodus add obra/superpowers --adapter claude --component skills --component rules
 ```
 
 That one command:
@@ -595,7 +595,6 @@ Current adapter behavior:
 - Claude: discovered agents are copied to `.claude/agents/<agent-id>_<source-id>.md`
 - Claude: discovered commands are copied to `.claude/commands/<command-id>_<source-id>.md`
 - Claude: discovered rules are copied to `.claude/rules/<rule-id>_<source-id>.md`
-- Codex: discovered skills are copied to `.codex/skills/<skill-id>_<source-id>/`
 - Codex: discovered rules are copied to `.codex/rules/<rule-id>_<source-id>.rules`
 - Cursor: discovered skills are copied to `.cursor/skills/<skill-id>_<source-id>/`
 - Cursor: discovered commands are copied to `.cursor/commands/<command-id>_<source-id>.md`

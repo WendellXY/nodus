@@ -891,7 +891,6 @@ fn build_mappings(
         for adapter in [
             Adapter::Agents,
             Adapter::Claude,
-            Adapter::Codex,
             Adapter::Cursor,
             Adapter::OpenCode,
         ] {
@@ -1341,7 +1340,6 @@ mod tests {
         for adapter in [
             Adapter::Agents,
             Adapter::Claude,
-            Adapter::Codex,
             Adapter::Cursor,
             Adapter::OpenCode,
         ] {
@@ -1659,7 +1657,7 @@ target = ".github/prompts/review.md"
             project.path(),
             cache.path(),
             &remote_repo,
-            &[Adapter::Codex],
+            &[Adapter::Claude],
         );
 
         let error = relay_dependency_in_dir(
@@ -1730,7 +1728,7 @@ target = ".github/prompts/review.md"
             project.path(),
             cache.path(),
             &remote_repo,
-            &[Adapter::Codex],
+            &[Adapter::Claude],
         );
 
         relay_dependency_in_dir(
@@ -1743,9 +1741,9 @@ target = ".github/prompts/review.md"
         )
         .unwrap();
 
-        let package = resolved_package(project.path(), cache.path(), &[Adapter::Codex]);
+        let package = resolved_package(project.path(), cache.path(), &[Adapter::Claude]);
         append_file(
-            &managed_skill_root(project.path(), Adapter::Codex, &package, "review")
+            &managed_skill_root(project.path(), Adapter::Claude, &package, "review")
                 .join("SKILL.md"),
             "\nPending relay change.\n",
         );
@@ -1827,11 +1825,6 @@ target = ".github/prompts/review.md"
             &[Adapter::Claude, Adapter::Codex],
         );
         assert!(
-            managed_skill_root(project.path(), Adapter::Codex, &package, "review")
-                .join("SKILL.md")
-                .exists()
-        );
-        assert!(
             managed_artifact_path(
                 project.path(),
                 Adapter::Codex,
@@ -1910,9 +1903,15 @@ tag = {:?}
             &[Adapter::Claude, Adapter::Codex],
         );
         assert!(
-            managed_skill_root(project.path(), Adapter::Codex, &package, "review")
-                .join("SKILL.md")
-                .exists()
+            managed_artifact_path(
+                project.path(),
+                Adapter::Codex,
+                ArtifactKind::Rule,
+                &package,
+                "policy",
+            )
+            .unwrap()
+            .exists()
         );
     }
 
@@ -1968,12 +1967,12 @@ tag = {:?}
             project.path(),
             cache.path(),
             &remote_repo,
-            &[Adapter::Codex],
+            &[Adapter::Claude],
         );
 
-        let package = resolved_package(project.path(), cache.path(), &[Adapter::Codex]);
-        let managed_skill =
-            managed_skill_root(project.path(), Adapter::Codex, &package, "review").join("SKILL.md");
+        let package = resolved_package(project.path(), cache.path(), &[Adapter::Claude]);
+        let managed_skill = managed_skill_root(project.path(), Adapter::Claude, &package, "review")
+            .join("SKILL.md");
 
         let project_root = project.path().to_path_buf();
         let cache_root = cache.path().to_path_buf();
@@ -2043,7 +2042,7 @@ tag = {:?}
             project.path(),
             cache.path(),
             &remote_repo_one,
-            &[Adapter::Codex],
+            &[Adapter::Claude],
         );
         let reporter = Reporter::silent();
         add_dependency_in_dir_with_adapters(
@@ -2052,7 +2051,7 @@ tag = {:?}
             &remote_repo_two.to_string_lossy(),
             AddDependencyOptions {
                 git_ref: Some(crate::manifest::RequestedGitRef::Tag("v0.2.0")),
-                adapters: &[Adapter::Codex],
+                adapters: &[Adapter::Claude],
                 components: &[],
                 sync_on_launch: false,
             },
@@ -2079,9 +2078,9 @@ tag = {:?}
         )
         .unwrap();
 
-        let package_one = resolved_package(project.path(), cache.path(), &[Adapter::Codex]);
+        let package_one = resolved_package(project.path(), cache.path(), &[Adapter::Claude]);
         let managed_skill_one =
-            managed_skill_root(project.path(), Adapter::Codex, &package_one, "review")
+            managed_skill_root(project.path(), Adapter::Claude, &package_one, "review")
                 .join("SKILL.md");
         let output = SharedBuffer::default();
         let output_for_watch = output.clone();

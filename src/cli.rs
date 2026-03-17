@@ -1234,7 +1234,7 @@ version = "0.1.0"
                 tag: None,
                 branch: None,
                 revision: None,
-                adapter: vec![Adapter::Codex],
+                adapter: vec![Adapter::Claude],
                 component: vec![],
                 sync_on_launch: false,
                 dry_run: false,
@@ -1261,7 +1261,7 @@ version = "0.1.0"
                 tag: None,
                 branch: None,
                 revision: None,
-                adapter: vec![Adapter::Codex],
+                adapter: vec![Adapter::Claude],
                 component: vec![],
                 sync_on_launch: false,
                 dry_run: true,
@@ -1411,7 +1411,7 @@ justification = "Run checks."
                 tag: None,
                 branch: None,
                 revision: None,
-                adapter: vec![Adapter::Codex],
+                adapter: vec![Adapter::Claude],
                 component: vec![],
                 sync_on_launch: false,
                 dry_run: false,
@@ -1522,7 +1522,7 @@ justification = "Run checks."
                 tag: None,
                 branch: None,
                 revision: None,
-                adapter: vec![Adapter::Codex],
+                adapter: vec![Adapter::Claude],
                 component: vec![],
                 sync_on_launch: false,
                 dry_run: false,
@@ -1596,7 +1596,7 @@ justification = "Run checks."
                 tag: None,
                 branch: None,
                 revision: None,
-                adapter: vec![Adapter::Codex],
+                adapter: vec![Adapter::Claude],
                 component: vec![],
                 sync_on_launch: false,
                 dry_run: false,
@@ -1607,7 +1607,7 @@ justification = "Run checks."
         )
         .unwrap();
 
-        let managed_skill = first_file_under(&temp.path().join(".codex"), "SKILL.md");
+        let managed_skill = first_file_under(&temp.path().join(".claude"), "SKILL.md");
         write_file(
             &managed_skill,
             "---\nname: Review\ndescription: Example skill.\n---\n# Edited\n",
@@ -1628,7 +1628,7 @@ justification = "Run checks."
                         .clone(),
                 ],
                 repo_path: Some(repo.path().to_path_buf()),
-                via: Some(Adapter::Codex),
+                via: Some(Adapter::Claude),
                 watch: false,
                 dry_run: true,
             },
@@ -1720,7 +1720,7 @@ justification = "Run checks."
                 tag: None,
                 branch: None,
                 revision: None,
-                adapter: vec![Adapter::Codex],
+                adapter: vec![Adapter::Claude],
                 component: vec![],
                 sync_on_launch: false,
                 dry_run: false,
@@ -1744,7 +1744,7 @@ justification = "Run checks."
                 tag: Some("v0.2.0".into()),
                 branch: None,
                 revision: None,
-                adapter: vec![Adapter::Codex],
+                adapter: vec![Adapter::Claude],
                 component: vec![],
                 sync_on_launch: false,
                 dry_run: false,
@@ -1773,7 +1773,7 @@ justification = "Run checks."
             Command::Relay {
                 packages: vec![alias_one.clone()],
                 repo_path: Some(linked_one.path().join("linked")),
-                via: Some(Adapter::Codex),
+                via: Some(Adapter::Claude),
                 watch: false,
                 dry_run: false,
             },
@@ -1786,7 +1786,7 @@ justification = "Run checks."
             Command::Relay {
                 packages: vec![alias_two.clone()],
                 repo_path: Some(linked_two.path().join("linked")),
-                via: Some(Adapter::Codex),
+                via: Some(Adapter::Claude),
                 watch: false,
                 dry_run: false,
             },
@@ -1796,7 +1796,7 @@ justification = "Run checks."
         )
         .unwrap();
 
-        let managed_skills = WalkDir::new(temp.path().join(".codex"))
+        let managed_skills = WalkDir::new(temp.path().join(".claude"))
             .into_iter()
             .filter_map(Result::ok)
             .filter(|entry| entry.file_type().is_file() && entry.file_name() == "SKILL.md")
@@ -1813,7 +1813,7 @@ justification = "Run checks."
             Command::Relay {
                 packages: aliases.clone(),
                 repo_path: None,
-                via: Some(Adapter::Codex),
+                via: Some(Adapter::Claude),
                 watch: false,
                 dry_run: false,
             },

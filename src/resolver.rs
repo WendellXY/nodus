@@ -2001,7 +2001,7 @@ shared = { path = "vendor/shared" }
         assert!(
             lockfile
                 .managed_files
-                .contains(&".codex/skills/checks".into())
+                .contains(&".claude/skills/checks".into())
         );
     }
 
@@ -2630,11 +2630,6 @@ shared = { path = "vendor/shared" }
         );
         assert!(
             temp.path()
-                .join(format!(".codex/skills/{managed_skill_id}/SKILL.md"))
-                .exists()
-        );
-        assert!(
-            temp.path()
                 .join(format!(".claude/agents/{managed_agent_file}"))
                 .exists()
         );
@@ -2755,11 +2750,6 @@ shared = { path = "vendor/shared", components = ["skills"] }
         assert!(
             temp.path()
                 .join(format!(".claude/skills/{managed_skill_id}/SKILL.md"))
-                .exists()
-        );
-        assert!(
-            temp.path()
-                .join(format!(".codex/skills/{managed_skill_id}/SKILL.md"))
                 .exists()
         );
         assert!(
@@ -2889,7 +2879,6 @@ shared = { path = "vendor/shared" }
         assert!(codex_gitignore.contains("# Managed by nodus"));
         assert!(codex_gitignore.contains(".gitignore"));
         let (_, suffix) = managed_skill_id.rsplit_once('_').unwrap();
-        assert!(codex_gitignore.contains(&format!("skills/*_{suffix}/")));
         assert!(codex_gitignore.contains(&format!("rules/*_{suffix}.rules")));
         let (_, command_suffix) = managed_command_file
             .trim_end_matches(".md")
@@ -3067,7 +3056,7 @@ sync_on_startup = true
             temp.path(),
             r#"
 [adapters]
-enabled = ["codex"]
+enabled = ["claude"]
 "#,
         );
 
@@ -3096,7 +3085,7 @@ enabled = ["codex"]
             &format!(
                 r#"
 [adapters]
-enabled = ["codex"]
+enabled = ["claude"]
 
 [dependencies]
 review_pkg = {{ url = "{}", branch = "main" }}
@@ -3124,7 +3113,7 @@ review_pkg = {{ url = "{}", branch = "main" }}
         let initial_skill_id = namespaced_skill_id(initial_dependency, "review");
         let initial_skill_path = temp
             .path()
-            .join(format!(".codex/skills/{initial_skill_id}/SKILL.md"));
+            .join(format!(".claude/skills/{initial_skill_id}/SKILL.md"));
         assert!(initial_skill_path.exists());
         assert!(
             fs::read_to_string(&initial_skill_path)
@@ -3176,7 +3165,7 @@ review_pkg = {{ url = "{}", branch = "main" }}
         let updated_skill_id = namespaced_skill_id(updated_dependency, "review");
         let updated_skill_path = temp
             .path()
-            .join(format!(".codex/skills/{updated_skill_id}/SKILL.md"));
+            .join(format!(".claude/skills/{updated_skill_id}/SKILL.md"));
         assert_ne!(updated_skill_id, initial_skill_id);
         assert!(!initial_skill_path.exists());
         assert!(updated_skill_path.exists());
@@ -3235,21 +3224,20 @@ shared = { path = "vendor/shared" }
 
         sync_all(temp.path(), cache.path());
         assert!(temp.path().join(".claude/skills").exists());
-        assert!(temp.path().join(".codex/skills").exists());
         assert!(temp.path().join(".opencode/skills").exists());
 
-        sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex])
+        sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Claude])
             .unwrap();
 
         let manifest = load_root_from_dir(temp.path()).unwrap();
         assert_eq!(
             manifest.manifest.enabled_adapters().unwrap(),
-            [Adapter::Codex].as_slice()
+            [Adapter::Claude].as_slice()
         );
-        assert!(!temp.path().join(".claude/skills").exists());
-        assert!(!temp.path().join(".claude/.gitignore").exists());
-        assert!(temp.path().join(".codex/skills").exists());
-        assert!(temp.path().join(".codex/.gitignore").exists());
+        assert!(temp.path().join(".claude/skills").exists());
+        assert!(temp.path().join(".claude/.gitignore").exists());
+        assert!(!temp.path().join(".codex/skills").exists());
+        assert!(!temp.path().join(".codex/.gitignore").exists());
         assert!(!temp.path().join(".opencode/skills").exists());
         assert!(!temp.path().join(".opencode/.gitignore").exists());
     }
@@ -3348,11 +3336,6 @@ shared = { path = "vendor/shared" }
             lockfile
                 .managed_files
                 .contains(&".claude/skills/iframe-ad".into())
-        );
-        assert!(
-            lockfile
-                .managed_files
-                .contains(&".codex/skills/iframe-ad".into())
         );
         assert!(
             lockfile

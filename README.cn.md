@@ -31,7 +31,7 @@ Nodus 面向这样一类仓库：希望消费 agent package，但不想手动拼
 
 ```bash
 nodus add obra/superpowers --adapter codex
-nodus add obra/superpowers --adapter codex --component skills
+nodus add obra/superpowers --adapter claude --component skills
 nodus info obra/superpowers
 nodus relay superpowers --repo-path ../superpowers
 nodus doctor
@@ -126,7 +126,7 @@ nodus add obra/superpowers --adapter codex
 如果只想安装该包中的部分制品类型：
 
 ```bash
-nodus add obra/superpowers --adapter codex --component skills --component rules
+nodus add obra/superpowers --adapter claude --component skills --component rules
 ```
 
 这一条命令会：
@@ -565,7 +565,6 @@ Nodus 只管理它自己写入的文件。
 - Claude：发现到的 agents 会复制到 `.claude/agents/<agent-id>_<source-id>.md`
 - Claude：发现到的 commands 会复制到 `.claude/commands/<command-id>_<source-id>.md`
 - Claude：发现到的 rules 会复制到 `.claude/rules/<rule-id>_<source-id>.md`
-- Codex：发现到的 skills 会复制到 `.codex/skills/<skill-id>_<source-id>/`
 - Codex：发现到的 rules 会复制到 `.codex/rules/<rule-id>_<source-id>.rules`
 - Cursor：发现到的 skills 会复制到 `.cursor/skills/<skill-id>_<source-id>/`
 - Cursor：发现到的 commands 会复制到 `.cursor/commands/<command-id>_<source-id>.md`

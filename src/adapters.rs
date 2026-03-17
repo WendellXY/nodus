@@ -141,7 +141,6 @@ impl ArtifactKind {
         match self {
             Self::Skill => Adapters::AGENTS
                 .union(Adapters::CLAUDE)
-                .union(Adapters::CODEX)
                 .union(Adapters::CURSOR)
                 .union(Adapters::OPENCODE),
             Self::Agent => Adapters::CLAUDE.union(Adapters::OPENCODE),
@@ -377,19 +376,6 @@ pub fn build_output_plan(
                 )?;
                 plan.managed_files
                     .insert(format!(".claude/skills/{}", skill.id));
-            }
-
-            if selected_adapters.contains(Adapter::Codex)
-                && ArtifactKind::Skill
-                    .supported_adapters()
-                    .contains(Adapter::Codex)
-            {
-                merge_files(
-                    &mut plan.files,
-                    codex::skill_files(project_root, package, snapshot_root, skill)?,
-                )?;
-                plan.managed_files
-                    .insert(format!(".codex/skills/{}", skill.id));
             }
 
             if selected_adapters.contains(Adapter::Cursor)
@@ -855,10 +841,9 @@ mod tests {
         assert!(skill.contains(Adapter::Agents));
         assert!(skill.intersects(Adapters::CLAUDE));
         assert!(skill.contains(Adapter::Claude));
-        assert!(skill.contains(Adapter::Codex));
         assert!(skill.contains(Adapter::Cursor));
         assert!(skill.contains(Adapter::OpenCode));
-        assert_eq!(skill.iter().count(), 5);
+        assert_eq!(skill.iter().count(), 4);
 
         let agent = ArtifactKind::Agent.supported_adapters();
         assert!(!agent.contains(Adapter::Agents));
