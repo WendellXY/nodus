@@ -140,9 +140,16 @@ enum Command {
     },
     #[command(about = "Relay linked managed edits back into a maintainer checkout")]
     Relay {
-        #[arg(help = "Dependency alias or repository reference to relay")]
-        package: String,
-        #[arg(long, help = "Local checkout path to persist and relay into")]
+        #[arg(
+            required = true,
+            num_args = 1..,
+            help = "One or more dependency aliases or repository references to relay"
+        )]
+        packages: Vec<String>,
+        #[arg(
+            long,
+            help = "Local checkout path to persist and relay into; requires exactly one dependency"
+        )]
         repo_path: Option<PathBuf>,
         #[arg(
             long = "via",
@@ -433,55 +440,93 @@ fn run_command_in_dir(
             Ok(())
         }
         Command::Relay {
-            package,
+            packages,
             repo_path,
             via,
             watch,
             dry_run,
         } => {
+            if packages.len() > 1 {
+                anyhow::ensure!(
+                    repo_path.is_none(),
+                    "`nodus relay --repo-path` requires exactly one dependency"
+                );
+            }
+
             if watch {
-                crate::relay::watch_dependency_in_dir(
-                    cwd,
-                    cache_root,
-                    &package,
-                    repo_path.as_deref(),
-                    via,
-                    reporter,
-                )
+                if packages.len() == 1 {
+                    crate::relay::watch_dependency_in_dir(
+                        cwd,
+                        cache_root,
+                        &packages[0],
+                        repo_path.as_deref(),
+                        via,
+                        reporter,
+                    )
+                } else {
+                    crate::relay::watch_dependencies_in_dir(
+                        cwd, cache_root, &packages, via, reporter,
+                    )
+                }
             } else {
-                let summary = if dry_run {
-                    crate::relay::relay_dependency_in_dir_dry_run(
-                        cwd,
-                        cache_root,
-                        &package,
-                        repo_path.as_deref(),
-                        via,
-                        reporter,
-                    )?
+                let mut summaries = Vec::with_capacity(packages.len());
+                for package in &packages {
+                    let summary = if dry_run {
+                        crate::relay::relay_dependency_in_dir_dry_run(
+                            cwd,
+                            cache_root,
+                            package,
+                            repo_path.as_deref(),
+                            via,
+                            reporter,
+                        )?
+                    } else {
+                        crate::relay::relay_dependency_in_dir(
+                            cwd,
+                            cache_root,
+                            package,
+                            repo_path.as_deref(),
+                            via,
+                            reporter,
+                        )?
+                    };
+                    summaries.push(summary);
+                }
+
+                let message = if let [summary] = summaries.as_slice() {
+                    if dry_run {
+                        format!(
+                            "dry run: would relay {} into {}; would update {} source files",
+                            summary.alias,
+                            display_path(&summary.linked_repo),
+                            summary.updated_file_count,
+                        )
+                    } else {
+                        format!(
+                            "relayed {} into {}; updated {} source files",
+                            summary.alias,
+                            display_path(&summary.linked_repo),
+                            summary.updated_file_count,
+                        )
+                    }
                 } else {
-                    crate::relay::relay_dependency_in_dir(
-                        cwd,
-                        cache_root,
-                        &package,
-                        repo_path.as_deref(),
-                        via,
-                        reporter,
-                    )?
-                };
-                let message = if dry_run {
-                    format!(
-                        "dry run: would relay {} into {}; would update {} source files",
-                        summary.alias,
-                        display_path(&summary.linked_repo),
-                        summary.updated_file_count,
-                    )
-                } else {
-                    format!(
-                        "relayed {} into {}; updated {} source files",
-                        summary.alias,
-                        display_path(&summary.linked_repo),
-                        summary.updated_file_count,
-                    )
+                    let updated_file_count = summaries
+                        .iter()
+                        .map(|summary| summary.updated_file_count)
+                        .sum::<usize>();
+                    if dry_run {
+                        format!(
+                            "dry run: would relay {} dependencies; would update {} source files",
+                            summaries.len(),
+                            updated_file_count,
+                        )
+                    } else {
+                        format!(
+                            "relayed {} dependencies; updated {} source files",
+                            summaries.len(),
+                            updated_file_count,
+                        )
+                    }
                 };
                 reporter.finish(message)?;
                 Ok(())
@@ -799,16 +844,28 @@ mod tests {
 
         match cli.command {
             Command::Relay {
-                package,
+                packages,
                 repo_path,
                 via,
                 watch,
                 ..
             } => {
-                assert_eq!(package, "wenext-limited/playbook-ios");
+                assert_eq!(packages, ["wenext-limited/playbook-ios"]);
                 assert_eq!(repo_path.as_deref(), Some(Path::new("/tmp/playbook-ios")));
                 assert_eq!(via, None);
                 assert!(watch);
+            }
+            other => panic!("expected relay command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_multiple_relay_targets() {
+        let cli = Cli::try_parse_from(["nodus", "relay", "example/one", "example/two"]).unwrap();
+
+        match cli.command {
+            Command::Relay { packages, .. } => {
+                assert_eq!(packages, ["example/one", "example/two"]);
             }
             other => panic!("expected relay command, got {other:?}"),
         }
@@ -1558,14 +1615,16 @@ justification = "Run checks."
 
         let output = run_command_output(
             Command::Relay {
-                package: crate::manifest::load_root_from_dir(temp.path())
-                    .unwrap()
-                    .manifest
-                    .dependencies
-                    .keys()
-                    .next()
-                    .unwrap()
-                    .clone(),
+                packages: vec![
+                    crate::manifest::load_root_from_dir(temp.path())
+                        .unwrap()
+                        .manifest
+                        .dependencies
+                        .keys()
+                        .next()
+                        .unwrap()
+                        .clone(),
+                ],
                 repo_path: Some(repo.path().to_path_buf()),
                 via: Some(Adapter::Codex),
                 watch: false,
@@ -1580,5 +1639,196 @@ justification = "Run checks."
         assert_eq!(read_optional(&repo_skill).unwrap(), repo_before);
         assert!(!temp.path().join(".nodus/local.toml").exists());
         assert!(!temp.path().join(".nodus/.gitignore").exists());
+    }
+
+    #[test]
+    fn relay_rejects_repo_path_for_multiple_dependencies() {
+        let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+
+        let error = run_command_in_dir(
+            Command::Relay {
+                packages: vec!["example/one".into(), "example/two".into()],
+                repo_path: Some(PathBuf::from("/tmp/example")),
+                via: None,
+                watch: false,
+                dry_run: false,
+            },
+            temp.path(),
+            cache.path(),
+            &Reporter::silent(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("`nodus relay --repo-path` requires exactly one dependency")
+        );
+    }
+
+    fn clone_linked_repo(remote: &Path) -> TempDir {
+        let linked = TempDir::new().unwrap();
+        let target = linked.path().join("linked");
+        let output = ProcessCommand::new("git")
+            .args([
+                "clone",
+                remote.to_string_lossy().as_ref(),
+                target.to_string_lossy().as_ref(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        linked
+    }
+
+    #[test]
+    fn relay_supports_multiple_dependencies_in_one_command() {
+        let temp = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let (repo_one, url_one) = create_git_dependency();
+        let (repo_two, url_two) = create_git_dependency();
+        write_file(&repo_two.path().join("README.md"), "# Second dependency\n");
+        for args in [
+            vec!["add", "."],
+            vec!["commit", "-m", "second"],
+            vec!["tag", "v0.2.0"],
+        ] {
+            let output = ProcessCommand::new("git")
+                .args(args)
+                .current_dir(repo_two.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let linked_one = clone_linked_repo(repo_one.path());
+        let linked_two = clone_linked_repo(repo_two.path());
+
+        run_command_in_dir(
+            Command::Add {
+                url: url_one,
+                tag: None,
+                branch: None,
+                revision: None,
+                adapter: vec![Adapter::Codex],
+                component: vec![],
+                sync_on_launch: false,
+                dry_run: false,
+            },
+            temp.path(),
+            cache.path(),
+            &Reporter::silent(),
+        )
+        .unwrap();
+        let alias_one = crate::manifest::load_root_from_dir(temp.path())
+            .unwrap()
+            .manifest
+            .dependencies
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        run_command_in_dir(
+            Command::Add {
+                url: url_two,
+                tag: Some("v0.2.0".into()),
+                branch: None,
+                revision: None,
+                adapter: vec![Adapter::Codex],
+                component: vec![],
+                sync_on_launch: false,
+                dry_run: false,
+            },
+            temp.path(),
+            cache.path(),
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        let aliases = crate::manifest::load_root_from_dir(temp.path())
+            .unwrap()
+            .manifest
+            .dependencies
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(aliases.len(), 2);
+        let alias_two = aliases
+            .iter()
+            .find(|alias| **alias != alias_one)
+            .unwrap()
+            .clone();
+
+        run_command_in_dir(
+            Command::Relay {
+                packages: vec![alias_one.clone()],
+                repo_path: Some(linked_one.path().join("linked")),
+                via: Some(Adapter::Codex),
+                watch: false,
+                dry_run: false,
+            },
+            temp.path(),
+            cache.path(),
+            &Reporter::silent(),
+        )
+        .unwrap();
+        run_command_in_dir(
+            Command::Relay {
+                packages: vec![alias_two.clone()],
+                repo_path: Some(linked_two.path().join("linked")),
+                via: Some(Adapter::Codex),
+                watch: false,
+                dry_run: false,
+            },
+            temp.path(),
+            cache.path(),
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        let managed_skills = WalkDir::new(temp.path().join(".codex"))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file() && entry.file_name() == "SKILL.md")
+            .map(|entry| entry.into_path())
+            .collect::<Vec<_>>();
+        assert_eq!(managed_skills.len(), 2);
+        for path in &managed_skills {
+            let mut contents = fs::read_to_string(path).unwrap();
+            contents.push_str("\nBatch relay update.\n");
+            fs::write(path, contents).unwrap();
+        }
+
+        let output = run_command_output(
+            Command::Relay {
+                packages: aliases.clone(),
+                repo_path: None,
+                via: Some(Adapter::Codex),
+                watch: false,
+                dry_run: false,
+            },
+            temp.path(),
+            cache.path(),
+        );
+
+        assert!(output.contains("relayed 2 dependencies; updated 2 source files"));
+        assert!(
+            fs::read_to_string(linked_one.path().join("linked/skills/review/SKILL.md"))
+                .unwrap()
+                .ends_with("\nBatch relay update.\n")
+        );
+        assert!(
+            fs::read_to_string(linked_two.path().join("linked/skills/review/SKILL.md"))
+                .unwrap()
+                .ends_with("\nBatch relay update.\n")
+        );
     }
 }

@@ -452,7 +452,7 @@ nodus info obra/superpowers --branch main
 ### `nodus relay`
 
 ```bash
-nodus relay <dependency> [--repo-path <path>] [--via <adapter>] [--watch]
+nodus relay <dependency>... [--repo-path <path>] [--via <adapter>] [--watch]
 ```
 
 把 `.codex/`、`.claude/`、`.cursor/`、`.agents/`、`.opencode/` 等受管理运行时目录中的修改，回写到你本地维护的直接 Git 依赖检出。
@@ -462,18 +462,22 @@ nodus relay <dependency> [--repo-path <path>] [--via <adapter>] [--watch]
 - 只支持 `nodus.toml` 中的直接 Git 依赖
 - 需要当前有效的 `nodus.lock`，并以锁定快照作为回写基线
 - 将维护者本地关联信息持久化到 `.nodus/local.toml`
+- 支持在一次命令中传入多个依赖，并按各自已持久化的 relay link 逐个回写
 - `--via <adapter>` 会在 `.nodus/local.toml` 中持久化一个首选适配器提示，用于在 relay 元数据需要记录哪个适配器应被视为规范来源时使用；别名：`--relay-via`、`--prefer`
+- `--repo-path <path>` 仍然只能配合单个依赖使用，因为每个 relay link 只对应一个维护者检出
 - 自动写入 `.nodus/.gitignore`，保证该本地关联配置默认不纳入版本控制
 - 会校验关联检出是 Git 仓库，且其 `origin` 与依赖 URL 一致
 - 只把变更过的源文件写回本地检出，不会自动 commit 或 push
-- 配合 `--watch` 使用时，会持续轮询受管理输出，并在检测到新修改后自动回写，直到你主动停止命令
+- 配合 `--watch` 使用时，会持续轮询受管理输出，并在检测到新修改后自动回写，直到你主动停止命令；多依赖 watch 会使用每个依赖已持久化的 relay link
 - 如果多个受管理变体的内容不一致，或关联源码与受管理输出都偏离了锁定基线，则会失败
 
 示例：
 
 ```bash
 nodus relay superpowers --repo-path ../superpowers
+nodus relay superpowers internal-tools docs-kit
 nodus relay superpowers --via claude
+nodus relay superpowers internal-tools --watch
 nodus relay superpowers --watch
 ```
 

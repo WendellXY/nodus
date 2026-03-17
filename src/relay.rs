@@ -71,7 +71,7 @@ struct RelayPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RelayWatchState {
     config: BTreeMap<PathBuf, PathFingerprint>,
-    managed: BTreeMap<PathBuf, PathFingerprint>,
+    managed: BTreeMap<String, BTreeMap<PathBuf, PathFingerprint>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +244,24 @@ pub fn watch_dependency_in_dir(
         cache_root,
         package,
         repo_path_override,
+        via_override,
+        reporter,
+        RelayWatchOptions::default(),
+    )
+    .map(|_| ())
+}
+
+pub fn watch_dependencies_in_dir(
+    project_root: &Path,
+    cache_root: &Path,
+    packages: &[String],
+    via_override: Option<Adapter>,
+    reporter: &Reporter,
+) -> Result<()> {
+    watch_dependencies_in_dir_with_options(
+        project_root,
+        cache_root,
+        packages,
         via_override,
         reporter,
         RelayWatchOptions::default(),
@@ -651,22 +669,73 @@ fn watch_dependency_in_dir_with_options(
     reporter: &Reporter,
     options: RelayWatchOptions,
 ) -> Result<Vec<RelaySummary>> {
-    let initial = relay_dependency_in_dir(
+    let packages = vec![package.to_string()];
+    watch_dependencies_in_dir_impl_with_options(
         project_root,
         cache_root,
-        package,
+        &packages,
         repo_path_override,
         via_override,
         reporter,
-    )?;
-    reporter.finish(format!(
-        "relayed {} into {}; updated {} source files",
-        initial.alias,
-        display_relative(project_root, &initial.linked_repo),
-        initial.updated_file_count,
-    ))?;
-    let mut summaries = vec![initial];
-    let mut state = capture_watch_state(project_root, cache_root, package, reporter)?;
+        options,
+    )
+}
+
+fn watch_dependencies_in_dir_with_options(
+    project_root: &Path,
+    cache_root: &Path,
+    packages: &[String],
+    via_override: Option<Adapter>,
+    reporter: &Reporter,
+    options: RelayWatchOptions,
+) -> Result<Vec<RelaySummary>> {
+    watch_dependencies_in_dir_impl_with_options(
+        project_root,
+        cache_root,
+        packages,
+        None,
+        via_override,
+        reporter,
+        options,
+    )
+}
+
+fn watch_dependencies_in_dir_impl_with_options(
+    project_root: &Path,
+    cache_root: &Path,
+    packages: &[String],
+    repo_path_override: Option<&Path>,
+    via_override: Option<Adapter>,
+    reporter: &Reporter,
+    options: RelayWatchOptions,
+) -> Result<Vec<RelaySummary>> {
+    if packages.is_empty() {
+        bail!("relay watch requires at least one dependency");
+    }
+    if packages.len() > 1 && repo_path_override.is_some() {
+        bail!("`nodus relay --repo-path` requires exactly one dependency");
+    }
+
+    let mut summaries = Vec::with_capacity(packages.len());
+    for package in packages {
+        let summary = relay_dependency_in_dir(
+            project_root,
+            cache_root,
+            package,
+            repo_path_override,
+            via_override,
+            reporter,
+        )?;
+        reporter.finish(format!(
+            "relayed {} into {}; updated {} source files",
+            summary.alias,
+            display_relative(project_root, &summary.linked_repo),
+            summary.updated_file_count,
+        ))?;
+        summaries.push(summary);
+    }
+
+    let mut state = capture_watch_state(project_root, cache_root, packages, reporter)?;
     reporter.note("watching managed outputs for changes; press Ctrl-C to stop")?;
     let mut polls = 0usize;
 
@@ -687,54 +756,71 @@ fn watch_dependency_in_dir_with_options(
         thread::sleep(options.poll_interval);
         polls += 1;
 
-        let next_state = capture_watch_state(project_root, cache_root, package, reporter)?;
+        let next_state = capture_watch_state(project_root, cache_root, packages, reporter)?;
         let config_changed = next_state.config != state.config;
-        let managed_changed = next_state.managed != state.managed;
-        if !config_changed && !managed_changed {
+        let changed_packages = changed_watch_packages(&state, &next_state);
+        if !config_changed && changed_packages.is_empty() {
             continue;
         }
 
         state = next_state;
-        if !managed_changed {
+        if changed_packages.is_empty() {
             reporter.note("reloaded relay watch inputs")?;
             continue;
         }
 
-        reporter.status("Watching", format!("detected managed edits for {package}"))?;
-        let summary =
-            relay_dependency_in_dir(project_root, cache_root, package, None, None, reporter)?;
-        reporter.finish(format!(
-            "relayed {} into {}; updated {} source files",
-            summary.alias,
-            display_relative(project_root, &summary.linked_repo),
-            summary.updated_file_count,
-        ))?;
-        summaries.push(summary);
-        state = capture_watch_state(project_root, cache_root, package, reporter)?;
+        for package in changed_packages {
+            reporter.status("Watching", format!("detected managed edits for {package}"))?;
+            let summary =
+                relay_dependency_in_dir(project_root, cache_root, &package, None, None, reporter)?;
+            reporter.finish(format!(
+                "relayed {} into {}; updated {} source files",
+                summary.alias,
+                display_relative(project_root, &summary.linked_repo),
+                summary.updated_file_count,
+            ))?;
+            summaries.push(summary);
+        }
+        state = capture_watch_state(project_root, cache_root, packages, reporter)?;
     }
+}
+
+fn changed_watch_packages(previous: &RelayWatchState, next: &RelayWatchState) -> Vec<String> {
+    let mut aliases = previous
+        .managed
+        .keys()
+        .chain(next.managed.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    aliases.retain(|alias| previous.managed.get(alias) != next.managed.get(alias));
+    aliases.into_iter().collect()
 }
 
 fn capture_watch_state(
     project_root: &Path,
     cache_root: &Path,
-    package: &str,
+    packages: &[String],
     reporter: &Reporter,
 ) -> Result<RelayWatchState> {
     let workspace = load_workspace(project_root, cache_root, reporter)?;
-    let dependency = dependency_context(&workspace, package)?;
-    let linked_repo = resolve_existing_link(&workspace.local_config, &dependency)?;
-    let mappings = build_mappings(
-        &dependency,
-        &workspace.project_root,
-        workspace.selected_adapters,
-        &linked_repo,
-    )?;
-
     let mut managed = BTreeMap::new();
-    for path in mappings.into_iter().map(|mapping| mapping.managed_path) {
-        managed
-            .entry(path.clone())
-            .or_insert(path_fingerprint(&path)?);
+    for package in packages {
+        let dependency = dependency_context(&workspace, package)?;
+        let linked_repo = resolve_existing_link(&workspace.local_config, &dependency)?;
+        let mappings = build_mappings(
+            &dependency,
+            &workspace.project_root,
+            workspace.selected_adapters,
+            &linked_repo,
+        )?;
+
+        let mut package_managed = BTreeMap::new();
+        for path in mappings.into_iter().map(|mapping| mapping.managed_path) {
+            package_managed
+                .entry(path.clone())
+                .or_insert(path_fingerprint(&path)?);
+        }
+        managed.insert(dependency.alias.clone(), package_managed);
     }
 
     let adapter_markers = [
@@ -1153,9 +1239,9 @@ mod tests {
         crate::paths::display_path(path)
     }
 
-    fn create_remote_dependency() -> (TempDir, PathBuf) {
+    fn create_remote_dependency_named(name: &str) -> (TempDir, PathBuf) {
         let temp = TempDir::new().unwrap();
-        let repo_path = temp.path().join("playbook-ios");
+        let repo_path = temp.path().join(name);
         fs::create_dir_all(&repo_path).unwrap();
         write_file(
             &repo_path.join("skills/review/SKILL.md"),
@@ -1170,6 +1256,10 @@ mod tests {
         init_git_repo(&repo_path);
         run_git(&repo_path, &["tag", "v0.1.0"]);
         (temp, repo_path)
+    }
+
+    fn create_remote_dependency() -> (TempDir, PathBuf) {
+        create_remote_dependency_named("playbook-ios")
     }
 
     fn clone_linked_repo(remote: &Path) -> TempDir {
@@ -1928,6 +2018,119 @@ tag = {:?}
             fs::read_to_string(linked_repo.join("skills/review/SKILL.md"))
                 .unwrap()
                 .ends_with("\nWatched relay update.\n")
+        );
+    }
+
+    #[test]
+    fn relay_watch_syncs_follow_up_managed_edits_for_multiple_dependencies() {
+        let (_remote_root_one, remote_repo_one) = create_remote_dependency_named("playbook-ios");
+        let (_remote_root_two, remote_repo_two) = create_remote_dependency_named("docs-kit");
+        append_file(
+            &remote_repo_two.join("skills/review/SKILL.md"),
+            "\nDocs baseline.\n",
+        );
+        run_git(&remote_repo_two, &["add", "."]);
+        run_git(&remote_repo_two, &["commit", "-m", "docs baseline"]);
+        run_git(&remote_repo_two, &["tag", "v0.2.0"]);
+
+        let linked_one = clone_linked_repo(&remote_repo_one);
+        let linked_two = clone_linked_repo(&remote_repo_two);
+        let linked_repo_one = linked_one.path().join("linked");
+        let linked_repo_two = linked_two.path().join("linked");
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        install_dependency(
+            project.path(),
+            cache.path(),
+            &remote_repo_one,
+            &[Adapter::Codex],
+        );
+        let reporter = Reporter::silent();
+        add_dependency_in_dir_with_adapters(
+            project.path(),
+            cache.path(),
+            &remote_repo_two.to_string_lossy(),
+            AddDependencyOptions {
+                git_ref: Some(crate::manifest::RequestedGitRef::Tag("v0.2.0")),
+                adapters: &[Adapter::Codex],
+                components: &[],
+                sync_on_launch: false,
+            },
+            &reporter,
+        )
+        .unwrap();
+
+        relay_dependency_in_dir(
+            project.path(),
+            cache.path(),
+            "playbook_ios",
+            Some(&linked_repo_one),
+            None,
+            &Reporter::silent(),
+        )
+        .unwrap();
+        relay_dependency_in_dir(
+            project.path(),
+            cache.path(),
+            "docs_kit",
+            Some(&linked_repo_two),
+            None,
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        let package_one = resolved_package(project.path(), cache.path(), &[Adapter::Codex]);
+        let managed_skill_one =
+            managed_skill_root(project.path(), Adapter::Codex, &package_one, "review")
+                .join("SKILL.md");
+        let output = SharedBuffer::default();
+        let output_for_watch = output.clone();
+        let project_root = project.path().to_path_buf();
+        let cache_root = cache.path().to_path_buf();
+        let watch_packages = vec!["playbook_ios".to_string(), "docs_kit".to_string()];
+        let watch_handle = thread::spawn(move || {
+            watch_dependencies_in_dir_with_options(
+                &project_root,
+                &cache_root,
+                &watch_packages,
+                None,
+                &Reporter::sink(ColorMode::Never, output_for_watch),
+                RelayWatchOptions {
+                    poll_interval: Duration::from_millis(20),
+                    max_events: Some(3),
+                    max_polls: Some(200),
+                },
+            )
+            .unwrap()
+        });
+
+        let mut ready = false;
+        for _ in 0..100 {
+            if output
+                .contents()
+                .contains("watching managed outputs for changes")
+            {
+                ready = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready, "watcher never reported readiness");
+        append_file(&managed_skill_one, "\nWatched relay update.\n");
+
+        let summaries = watch_handle.join().unwrap();
+        assert_eq!(summaries.len(), 3);
+        assert_eq!(summaries[2].alias, "playbook_ios");
+        assert_eq!(summaries[2].updated_file_count, 1);
+        assert!(
+            fs::read_to_string(linked_repo_one.join("skills/review/SKILL.md"))
+                .unwrap()
+                .ends_with("\nWatched relay update.\n")
+        );
+        assert!(
+            fs::read_to_string(linked_repo_two.join("skills/review/SKILL.md"))
+                .unwrap()
+                .ends_with("\nDocs baseline.\n")
         );
     }
 
