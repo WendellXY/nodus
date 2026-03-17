@@ -49,13 +49,13 @@ impl Reporter {
             writer: RefCell::new(Box::new(writer)),
             color_enabled: {
                 #[cfg(test)]
-                if matches!(_mode, ColorMode::Always) {
-                    true
-                } else {
-                    false
+                {
+                    matches!(_mode, ColorMode::Always)
                 }
                 #[cfg(not(test))]
-                false
+                {
+                    false
+                }
             },
         }
     }
