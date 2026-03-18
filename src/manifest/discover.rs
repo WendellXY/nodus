@@ -364,6 +364,7 @@ pub(super) fn collect_ignored_field_warnings(table: &Table) -> Vec<String> {
         "version",
         "capabilities",
         "adapters",
+        "launch_hooks",
         "dependencies",
     ];
 

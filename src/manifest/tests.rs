@@ -82,6 +82,24 @@ playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.1.0" }
 }
 
 #[test]
+fn does_not_warn_for_supported_launch_hook_config() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[launch_hooks]
+sync_on_startup = true
+"#,
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.warnings.is_empty());
+    assert!(loaded.manifest.sync_on_launch_enabled());
+}
+
+#[test]
 fn rejects_dependency_repo_without_supported_directories() {
     let temp = TempDir::new().unwrap();
     let error = load_dependency_from_dir(temp.path())
