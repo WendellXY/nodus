@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
+use serde::Serialize;
 
 use crate::git::{ensure_git_dependency, latest_tag, prepare_repository_mirror};
 use crate::lockfile::Lockfile;
@@ -16,7 +17,15 @@ pub struct OutdatedSummary {
     pub outdated_count: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+pub struct OutdatedReportSet {
+    pub dependency_count: usize,
+    pub outdated_count: usize,
+    pub dependencies: Vec<DependencyReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 enum DependencyStatus {
     Path {
         path: PathBuf,
@@ -46,9 +55,10 @@ enum DependencyStatus {
     },
 }
 
-#[derive(Debug, Clone)]
-struct DependencyReport {
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyReport {
     alias: String,
+    #[serde(flatten)]
     status: DependencyStatus,
 }
 
@@ -121,20 +131,44 @@ pub fn check_outdated_in_dir(
     cache_root: &Path,
     reporter: &Reporter,
 ) -> Result<OutdatedSummary> {
-    let root = load_root_from_dir(cwd)?;
-    let dependency_count = root.manifest.dependencies.len();
-    if dependency_count == 0 {
+    let report = collect_outdated_reports_in_dir(cwd, cache_root)?;
+    if report.dependency_count == 0 {
         reporter.note("no direct dependencies configured")?;
         return Ok(OutdatedSummary {
-            dependency_count,
+            dependency_count: report.dependency_count,
             outdated_count: 0,
         });
     }
 
     reporter.status(
         "Checking",
-        format!("{dependency_count} direct dependencies"),
+        format!("{} direct dependencies", report.dependency_count),
     )?;
+    for report in &report.dependencies {
+        reporter.line(report.render())?;
+    }
+
+    Ok(OutdatedSummary {
+        dependency_count: report.dependency_count,
+        outdated_count: report.outdated_count,
+    })
+}
+
+pub fn check_outdated_json_in_dir(cwd: &Path, cache_root: &Path) -> Result<OutdatedReportSet> {
+    collect_outdated_reports_in_dir(cwd, cache_root)
+}
+
+fn collect_outdated_reports_in_dir(cwd: &Path, cache_root: &Path) -> Result<OutdatedReportSet> {
+    let root = load_root_from_dir(cwd)?;
+    let dependency_count = root.manifest.dependencies.len();
+    if dependency_count == 0 {
+        return Ok(OutdatedReportSet {
+            dependency_count,
+            outdated_count: 0,
+            dependencies: Vec::new(),
+        });
+    }
+
     let lockfile = load_lockfile(cwd)?;
     let dependencies = root
         .manifest
@@ -157,15 +191,12 @@ pub fn check_outdated_in_dir(
             )
         })
         .collect::<Result<Vec<_>>>()?;
-
     let outdated_count = reports.iter().filter(|report| report.is_outdated()).count();
-    for report in reports {
-        reporter.line(report.render())?;
-    }
 
-    Ok(OutdatedSummary {
+    Ok(OutdatedReportSet {
         dependency_count,
         outdated_count,
+        dependencies: reports,
     })
 }
 

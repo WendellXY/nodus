@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use clap_complete::Shell;
+use serde_json::Value;
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
@@ -142,13 +143,26 @@ fn parses_info_subcommand() {
             package,
             tag,
             branch,
+            json,
         } => {
             assert_eq!(package, "obra/superpowers");
             assert_eq!(tag, None);
             assert_eq!(branch.as_deref(), Some("main"));
+            assert!(!json);
         }
         other => panic!("expected info command, got {other:?}"),
     }
+}
+
+#[test]
+fn parses_json_flags_for_read_only_commands() {
+    let info = Cli::try_parse_from(["nodus", "info", ".", "--json"]).unwrap();
+    let outdated = Cli::try_parse_from(["nodus", "outdated", "--json"]).unwrap();
+    let doctor = Cli::try_parse_from(["nodus", "doctor", "--json"]).unwrap();
+
+    assert!(matches!(info.command, Command::Info { json: true, .. }));
+    assert!(matches!(outdated.command, Command::Outdated { json: true }));
+    assert!(matches!(doctor.command, Command::Doctor { json: true }));
 }
 
 #[test]
@@ -187,7 +201,7 @@ fn parses_outdated_subcommand() {
     let cli = Cli::try_parse_from(["nodus", "outdated"]).unwrap();
 
     match cli.command {
-        Command::Outdated => {}
+        Command::Outdated { json } => assert!(!json),
         other => panic!("expected outdated command, got {other:?}"),
     }
 }
@@ -381,6 +395,23 @@ fn review_help_describes_arguments() {
 }
 
 #[test]
+fn read_only_help_mentions_json() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    for name in ["info", "outdated", "doctor"] {
+        let help = root
+            .find_subcommand_mut(name)
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("--json"), "{name} help missing --json");
+        assert!(
+            help.contains("Emit machine-readable JSON"),
+            "{name} help missing JSON description"
+        );
+    }
+}
+
+#[test]
 fn completion_help_describes_shell_argument() {
     let mut root = <Cli as clap::CommandFactory>::command();
     let help = root
@@ -560,6 +591,7 @@ version = "0.1.0"
             package: ".".into(),
             tag: None,
             branch: None,
+            json: false,
         },
         temp.path(),
         cache.path(),
@@ -571,6 +603,38 @@ version = "0.1.0"
     assert!(output.contains("artifacts:"));
     assert!(output.contains("skills = [review]"));
     assert!(!output.contains("Finished"));
+}
+
+#[test]
+fn info_command_emits_json_without_status_lines() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    write_file(
+        &temp.path().join("nodus.toml"),
+        r#"
+name = "playbook-ios"
+version = "0.1.0"
+"#,
+    );
+    write_skill(&temp.path().join("skills/review"), "Review");
+
+    let output = run_command_output(
+        Command::Info {
+            package: ".".into(),
+            tag: None,
+            branch: None,
+            json: true,
+        },
+        temp.path(),
+        cache.path(),
+    );
+
+    let json: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(json["name"], "playbook-ios");
+    assert_eq!(json["alias"], "playbook_ios");
+    assert_eq!(json["skills"], serde_json::json!(["review"]));
+    assert!(!output.contains("Finished"));
+    assert!(!output.contains("Checking"));
 }
 
 #[test]
@@ -706,11 +770,80 @@ fn doctor_command_emits_checking_and_finished_lines() {
     )
     .unwrap();
 
-    let output = run_command_output(Command::Doctor, temp.path(), cache.path());
+    let output = run_command_output(Command::Doctor { json: false }, temp.path(), cache.path());
 
     assert!(output.contains("Checking"));
     assert!(output.contains("Finished"));
     assert!(output.contains("project state is consistent"));
+}
+
+#[test]
+fn doctor_command_emits_json_without_status_lines() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join(".codex")).unwrap();
+
+    let reporter = Reporter::silent();
+    resolver::sync_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        false,
+        false,
+        &[],
+        false,
+        &reporter,
+    )
+    .unwrap();
+
+    let output = run_command_output(Command::Doctor { json: true }, temp.path(), cache.path());
+
+    let json: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(json["package_count"], 1);
+    assert_eq!(json["warnings"], serde_json::json!([]));
+    assert!(!output.contains("Checking"));
+    assert!(!output.contains("Finished"));
+}
+
+#[test]
+fn outdated_command_emits_json_without_status_lines() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (_repo, url) = create_git_dependency();
+
+    run_command_in_dir(
+        Command::Add {
+            url,
+            tag: Some("v0.1.0".into()),
+            branch: None,
+            revision: None,
+            adapter: vec![Adapter::Codex],
+            component: vec![],
+            sync_on_launch: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+    let alias = crate::manifest::load_root_from_dir(temp.path())
+        .unwrap()
+        .manifest
+        .dependencies
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+
+    let output = run_command_output(Command::Outdated { json: true }, temp.path(), cache.path());
+
+    let json: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(json["dependency_count"], 1);
+    assert_eq!(json["outdated_count"], 0);
+    assert_eq!(json["dependencies"][0]["alias"], alias);
+    assert_eq!(json["dependencies"][0]["status"], "git_tag_current");
+    assert!(!output.contains("Checking"));
+    assert!(!output.contains("Finished"));
 }
 
 #[test]

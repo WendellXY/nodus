@@ -94,6 +94,11 @@ pub(super) enum Command {
         tag: Option<String>,
         #[arg(long, conflicts_with = "tag", help = "Inspect a specific Git branch")]
         branch: Option<String>,
+        #[arg(
+            long,
+            help = "Emit machine-readable JSON instead of human-readable text"
+        )]
+        json: bool,
     },
     #[command(about = "Use an AI review agent to assess whether a package graph looks safe to use")]
     Review {
@@ -120,7 +125,13 @@ pub(super) enum Command {
         model: Option<String>,
     },
     #[command(about = "Check direct dependencies for newer tags or branch head changes")]
-    Outdated,
+    Outdated {
+        #[arg(
+            long,
+            help = "Emit machine-readable JSON instead of human-readable text"
+        )]
+        json: bool,
+    },
     #[command(about = "Update direct dependencies and resync managed outputs")]
     Update {
         #[arg(
@@ -212,5 +223,11 @@ pub(super) enum Command {
         shell: Shell,
     },
     #[command(about = "Validate lockfile, shared store, and managed output consistency")]
-    Doctor,
+    Doctor {
+        #[arg(
+            long,
+            help = "Emit machine-readable JSON instead of human-readable text"
+        )]
+        json: bool,
+    },
 }

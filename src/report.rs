@@ -35,6 +35,15 @@ pub struct Reporter {
 }
 
 impl Reporter {
+    pub fn stdout() -> Self {
+        let stream = AutoStream::new(io::stdout().lock(), ColorMode::Auto.choice());
+        let color_enabled = !matches!(stream.current_choice(), ColorChoice::Never);
+        Self {
+            writer: RefCell::new(Box::new(stream)),
+            color_enabled,
+        }
+    }
+
     pub fn stderr() -> Self {
         let stream = AutoStream::new(io::stderr().lock(), ColorMode::Auto.choice());
         let color_enabled = !matches!(stream.current_choice(), ColorChoice::Never);

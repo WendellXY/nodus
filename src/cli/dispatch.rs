@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
+use serde::Serialize;
 
 use super::args::{Cli, Command};
 use crate::adapters::Adapter;
@@ -12,13 +13,18 @@ use crate::report::Reporter;
 
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
-    let reporter = Reporter::stderr();
-    let result = run_command(cli, &reporter);
+    let output_reporter = if uses_json_output(&cli.command) {
+        Reporter::stdout()
+    } else {
+        Reporter::stderr()
+    };
+    let error_reporter = Reporter::stderr();
+    let result = run_command(cli, &output_reporter);
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            if reporter.error(&error).is_err() {
+            if error_reporter.error(&error).is_err() {
                 eprintln!("error: {error:#}");
             }
             ExitCode::FAILURE
@@ -128,14 +134,30 @@ pub(super) fn run_command_in_dir(
             package,
             tag,
             branch,
-        } => crate::info::describe_package_in_dir(
-            cwd,
-            cache_root,
-            &package,
-            tag.as_deref(),
-            branch.as_deref(),
-            reporter,
-        ),
+            json,
+        } => {
+            if json {
+                write_json(
+                    reporter,
+                    &crate::info::describe_package_json_in_dir(
+                        cwd,
+                        cache_root,
+                        &package,
+                        tag.as_deref(),
+                        branch.as_deref(),
+                    )?,
+                )
+            } else {
+                crate::info::describe_package_in_dir(
+                    cwd,
+                    cache_root,
+                    &package,
+                    tag.as_deref(),
+                    branch.as_deref(),
+                    reporter,
+                )
+            }
+        }
         Command::Review {
             package,
             tag,
@@ -161,21 +183,28 @@ pub(super) fn run_command_in_dir(
             ))?;
             Ok(())
         }
-        Command::Outdated => {
-            let summary = crate::outdated::check_outdated_in_dir(cwd, cache_root, reporter)?;
-            let outcome = if summary.outdated_count == 0 {
-                format!(
-                    "checked {} direct dependencies; all current",
-                    summary.dependency_count
+        Command::Outdated { json } => {
+            if json {
+                write_json(
+                    reporter,
+                    &crate::outdated::check_outdated_json_in_dir(cwd, cache_root)?,
                 )
             } else {
-                format!(
-                    "checked {} direct dependencies; {} outdated",
-                    summary.dependency_count, summary.outdated_count
-                )
-            };
-            reporter.finish(outcome)?;
-            Ok(())
+                let summary = crate::outdated::check_outdated_in_dir(cwd, cache_root, reporter)?;
+                let outcome = if summary.outdated_count == 0 {
+                    format!(
+                        "checked {} direct dependencies; all current",
+                        summary.dependency_count
+                    )
+                } else {
+                    format!(
+                        "checked {} direct dependencies; {} outdated",
+                        summary.dependency_count, summary.outdated_count
+                    )
+                };
+                reporter.finish(outcome)?;
+                Ok(())
+            }
         }
         Command::Update {
             allow_high_sensitivity,
@@ -387,13 +416,18 @@ pub(super) fn run_command_in_dir(
             ))?;
             Ok(())
         }
-        Command::Doctor => {
-            let summary = crate::resolver::doctor_in_dir(cwd, cache_root, reporter)?;
-            reporter.finish(format!(
-                "project state is consistent across {} packages",
-                summary.package_count,
-            ))?;
-            Ok(())
+        Command::Doctor { json } => {
+            if json {
+                let summary = crate::resolver::doctor_in_dir(cwd, cache_root, &Reporter::silent())?;
+                write_json(reporter, &summary)
+            } else {
+                let summary = crate::resolver::doctor_in_dir(cwd, cache_root, reporter)?;
+                reporter.finish(format!(
+                    "project state is consistent across {} packages",
+                    summary.package_count,
+                ))?;
+                Ok(())
+            }
         }
         Command::Completion { shell } => {
             let mut command = Cli::command();
@@ -402,6 +436,17 @@ pub(super) fn run_command_in_dir(
             Ok(())
         }
     }
+}
+
+fn uses_json_output(command: &Command) -> bool {
+    match command {
+        Command::Info { json, .. } | Command::Outdated { json } | Command::Doctor { json } => *json,
+        _ => false,
+    }
+}
+
+fn write_json<T: Serialize>(reporter: &Reporter, value: &T) -> anyhow::Result<()> {
+    reporter.line(serde_json::to_string_pretty(value)?)
 }
 
 fn format_adapters(adapters: &[Adapter]) -> String {

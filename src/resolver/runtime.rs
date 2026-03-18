@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::adapters::{Adapter, Adapters, ManagedFile, build_output_plan};
@@ -63,9 +64,10 @@ pub struct SyncSummary {
     pub managed_file_count: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DoctorSummary {
     pub package_count: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -800,16 +802,20 @@ pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Resu
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
 
-    for warning in resolution
+    let warnings = resolution
         .warnings
         .iter()
         .chain(output_plan.warnings.iter())
-    {
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for warning in &warnings {
         reporter.warning(warning)?;
     }
 
     Ok(DoctorSummary {
         package_count: resolution.packages.len(),
+        warnings,
     })
 }
 

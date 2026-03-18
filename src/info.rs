@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anstyle::{AnsiColor, Effects, Style};
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::adapters::Adapter;
 use crate::git::{ensure_git_dependency, normalize_alias_from_url, normalize_git_url};
@@ -15,7 +15,7 @@ use crate::manifest::{
 use crate::paths::display_path;
 use crate::report::Reporter;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PackageInfo {
     alias: String,
     name: String,
@@ -42,7 +42,8 @@ pub struct PackageInfo {
     warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 enum PackageInfoSource {
     Path {
         path: PathBuf,
@@ -56,7 +57,7 @@ enum PackageInfoSource {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct PackageCapability {
     id: String,
     sensitivity: String,
@@ -120,6 +121,16 @@ pub fn describe_package_in_dir(
         reporter.line(line)?;
     }
     Ok(())
+}
+
+pub fn describe_package_json_in_dir(
+    cwd: &Path,
+    cache_root: &Path,
+    package: &str,
+    tag: Option<&str>,
+    branch: Option<&str>,
+) -> Result<PackageInfo> {
+    load_package_info(cwd, cache_root, package, tag, branch, &Reporter::silent())
 }
 
 fn load_package_info(
