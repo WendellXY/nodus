@@ -1,0 +1,6 @@
+name = "nodus"
+content_roots = ["plugin"]
+publish_root = true
+
+[adapters]
+enabled = ["codex"]
