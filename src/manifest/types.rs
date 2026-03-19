@@ -18,6 +18,10 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<Version>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub publish_root: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapters: Option<AdapterConfig>,
@@ -220,4 +224,8 @@ pub(super) struct ClaudeMarketplacePlugin {
 pub(super) struct ClaudePluginMetadata {
     #[serde(default)]
     pub(super) version: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

@@ -24,6 +24,13 @@ fn write_valid_skill(root: &Path) {
     );
 }
 
+fn write_skill(root: &Path, name: &str) {
+    write_file(
+        &root.join("SKILL.md"),
+        &format!("---\nname: {name}\ndescription: Example skill.\n---\n# {name}\n"),
+    );
+}
+
 fn write_marketplace(root: &Path, contents: &str) {
     write_file(&root.join(".claude-plugin/marketplace.json"), contents);
 }
@@ -114,6 +121,29 @@ sync_on_startup = true
 
     assert!(loaded.warnings.is_empty());
     assert!(loaded.manifest.sync_on_launch_enabled());
+}
+
+#[test]
+fn does_not_warn_for_supported_content_root_config() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    fs::create_dir_all(temp.path().join("nodus-development")).unwrap();
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+content_roots = ["nodus-development"]
+publish_root = true
+"#,
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.warnings.is_empty());
+    assert_eq!(
+        loaded.manifest.content_roots,
+        vec![PathBuf::from("nodus-development")]
+    );
+    assert!(loaded.manifest.publish_root);
 }
 
 #[test]
@@ -591,6 +621,79 @@ fn discovers_agents_rules_and_commands() {
 }
 
 #[test]
+fn discovers_artifacts_from_configured_content_root() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+content_roots = ["nodus-development"]
+"#,
+    );
+    write_skill(
+        &temp.path().join("nodus-development/skills/checks"),
+        "Checks",
+    );
+    write_file(
+        &temp.path().join("nodus-development/agents/reviewer.md"),
+        "# Reviewer\n",
+    );
+    write_file(
+        &temp.path().join("nodus-development/rules/policy.md"),
+        "# Policy\n",
+    );
+    write_file(
+        &temp.path().join("nodus-development/commands/build.txt"),
+        "cargo test\n",
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+
+    assert_eq!(
+        loaded
+            .discovered
+            .skills
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("checks", Path::new("nodus-development/skills/checks")),
+            ("review", Path::new("skills/review")),
+        ]
+    );
+    assert_eq!(
+        loaded
+            .discovered
+            .agents
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![(
+            "reviewer",
+            Path::new("nodus-development/agents/reviewer.md")
+        )]
+    );
+    assert_eq!(
+        loaded
+            .discovered
+            .rules
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![("policy", Path::new("nodus-development/rules/policy.md"))]
+    );
+    assert_eq!(
+        loaded
+            .discovered
+            .commands
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![("build", Path::new("nodus-development/commands/build.txt"))]
+    );
+}
+
+#[test]
 fn discovers_nested_rules_with_stable_ids() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
@@ -627,6 +730,25 @@ fn ignores_readme_and_dotfiles_in_discovery_directories() {
     assert_eq!(loaded.discovered.skills[0].id, "review");
     assert_eq!(loaded.discovered.agents.len(), 1);
     assert_eq!(loaded.discovered.agents[0].id, "security");
+}
+
+#[test]
+fn rejects_duplicate_artifact_ids_across_content_roots() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+content_roots = ["nodus-development"]
+"#,
+    );
+    write_skill(
+        &temp.path().join("nodus-development/skills/review"),
+        "Review Again",
+    );
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("duplicate skill id `review`"));
 }
 
 #[test]
@@ -671,6 +793,23 @@ fn serializes_dependencies_as_inline_tables() {
     assert!(encoded.contains("version = \"0.1.0\""));
     assert!(encoded.contains("components = [\"skills\", \"rules\"]"));
     assert!(!encoded.contains("url = "));
+}
+
+#[test]
+fn serializes_content_roots_and_publish_root() {
+    let manifest = Manifest {
+        content_roots: vec![
+            PathBuf::from("nodus-development"),
+            PathBuf::from("vendor/skills"),
+        ],
+        publish_root: true,
+        ..Manifest::default()
+    };
+
+    let encoded = serialize_manifest(&manifest).unwrap();
+
+    assert!(encoded.contains("content_roots = [\"nodus-development\", \"vendor/skills\"]"));
+    assert!(encoded.contains("publish_root = true"));
 }
 
 #[test]
@@ -828,6 +967,53 @@ sync_on_startup = false
 
     let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
     assert!(error.contains("launch_hooks.sync_on_startup"));
+}
+
+#[test]
+fn rejects_content_roots_with_parent_segments() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+content_roots = ["../shared"]
+"#,
+    );
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("manifest field `content_roots` entry"));
+}
+
+#[test]
+fn rejects_duplicate_content_roots_after_normalization() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    fs::create_dir_all(temp.path().join("nodus-development")).unwrap();
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+content_roots = ["nodus-development", "./nodus-development"]
+"#,
+    );
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("must not contain duplicate paths"));
+}
+
+#[test]
+fn rejects_missing_content_root_directory() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+content_roots = ["nodus-development"]
+"#,
+    );
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("content_roots"));
+    assert!(error.contains("nodus-development"));
 }
 
 #[test]

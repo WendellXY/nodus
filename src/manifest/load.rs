@@ -31,11 +31,13 @@ pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
         (Manifest::default(), Vec::new(), None)
     };
 
+    let discovered = discover_package_contents(&root, &manifest)?;
+
     let mut loaded = LoadedManifest {
         root: root.clone(),
         manifest_path,
         manifest,
-        discovered: discover_package_contents(&root)?,
+        discovered,
         warnings,
         extra_package_files: Vec::new(),
         allows_empty_dependency_wrapper: false,
@@ -67,6 +69,18 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
     }
     if let Some(version) = &manifest.version {
         output.push_str(&format!("version = {}\n", quote(&version.to_string())));
+    }
+    if !manifest.content_roots.is_empty() {
+        let encoded = manifest
+            .content_roots
+            .iter()
+            .map(|path| quote(&display_path(path)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!("content_roots = [{encoded}]\n"));
+    }
+    if manifest.publish_root {
+        output.push_str("publish_root = true\n");
     }
 
     if !manifest.capabilities.is_empty() {

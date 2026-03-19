@@ -25,6 +25,21 @@ impl LoadedManifest {
         {
             bail!("manifest field `name` must not be empty");
         }
+        let normalized_content_roots = self.manifest.normalized_content_roots()?;
+        for content_root in &normalized_content_roots {
+            let resolved = self.resolve_existing_path(content_root).with_context(|| {
+                format!(
+                    "manifest field `content_roots` contains invalid path `{}`",
+                    display_path(content_root)
+                )
+            })?;
+            if !resolved.is_dir() {
+                bail!(
+                    "manifest field `content_roots` path `{}` must point to a directory",
+                    display_path(content_root)
+                );
+            }
+        }
         if let Some(adapters) = &self.manifest.adapters {
             if adapters.enabled.is_empty() {
                 bail!("manifest field `adapters.enabled` must not be empty");
@@ -235,6 +250,20 @@ impl Manifest {
         self.adapters
             .as_ref()
             .map(|config| config.enabled.as_slice())
+    }
+
+    pub fn normalized_content_roots(&self) -> Result<Vec<PathBuf>> {
+        let mut normalized_roots = Vec::with_capacity(self.content_roots.len());
+        let mut seen = HashSet::new();
+        for root in &self.content_roots {
+            let normalized =
+                normalize_manifest_relative_path(root, "manifest field `content_roots` entry")?;
+            if !seen.insert(normalized.clone()) {
+                bail!("manifest field `content_roots` must not contain duplicate paths");
+            }
+            normalized_roots.push(normalized);
+        }
+        Ok(normalized_roots)
     }
 
     pub fn set_enabled_adapters(&mut self, adapters: &[Adapter]) {

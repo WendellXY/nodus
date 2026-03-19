@@ -144,26 +144,125 @@ pub(super) fn load_claude_marketplace_wrapper(
     }))
 }
 
-pub(super) fn discover_package_contents(root: &Path) -> Result<PackageContents> {
+pub(super) fn discover_package_contents(
+    root: &Path,
+    manifest: &Manifest,
+) -> Result<PackageContents> {
+    let mut skills = Vec::new();
+    let mut skill_ids = HashSet::new();
+    let mut agents = Vec::new();
+    let mut agent_ids = HashSet::new();
+    let mut rules = Vec::new();
+    let mut rule_ids = HashSet::new();
+    let mut commands = Vec::new();
+    let mut command_ids = HashSet::new();
+
+    for discovery_root in discovery_roots(root, manifest)? {
+        merge_skill_entries(
+            &mut skills,
+            &mut skill_ids,
+            discover_skills(root, &discovery_root)?,
+        )?;
+        merge_file_entries(
+            &mut agents,
+            &mut agent_ids,
+            "agent",
+            discover_files(root, &discovery_root, "agents", true, false)?,
+        )?;
+        merge_file_entries(
+            &mut rules,
+            &mut rule_ids,
+            "rule",
+            discover_files(root, &discovery_root, "rules", false, true)?,
+        )?;
+        merge_file_entries(
+            &mut commands,
+            &mut command_ids,
+            "command",
+            discover_files(root, &discovery_root, "commands", false, true)?,
+        )?;
+    }
+
+    skills.sort_by(|left, right| left.id.cmp(&right.id));
+    agents.sort_by(|left, right| left.id.cmp(&right.id));
+    rules.sort_by(|left, right| left.id.cmp(&right.id));
+    commands.sort_by(|left, right| left.id.cmp(&right.id));
+
     Ok(PackageContents {
-        skills: discover_skills(root)?,
-        agents: discover_files(root, "agents", true, false)?,
-        rules: discover_files(root, "rules", false, true)?,
-        commands: discover_files(root, "commands", false, true)?,
+        skills,
+        agents,
+        rules,
+        commands,
     })
 }
 
-fn discover_skills(root: &Path) -> Result<Vec<SkillEntry>> {
-    let skills_root = root.join("skills");
+fn discovery_roots(root: &Path, manifest: &Manifest) -> Result<Vec<PathBuf>> {
+    let mut roots = vec![PathBuf::new()];
+    for content_root in manifest.normalized_content_roots()? {
+        let resolved =
+            canonicalize_existing_path(&root.join(&content_root)).with_context(|| {
+                format!(
+                    "manifest field `content_roots` contains invalid path `{}`",
+                    content_root.display()
+                )
+            })?;
+        if !resolved.starts_with(root) {
+            bail!(
+                "manifest field `content_roots` path `{}` escapes the package root",
+                content_root.display()
+            );
+        }
+        if !resolved.is_dir() {
+            bail!(
+                "manifest field `content_roots` path `{}` must point to a directory",
+                content_root.display()
+            );
+        }
+        roots.push(content_root);
+    }
+    Ok(roots)
+}
+
+fn merge_skill_entries(
+    destination: &mut Vec<SkillEntry>,
+    ids: &mut HashSet<String>,
+    discovered: Vec<SkillEntry>,
+) -> Result<()> {
+    for skill in discovered {
+        if !ids.insert(skill.id.clone()) {
+            bail!("duplicate skill id `{}`", skill.id);
+        }
+        destination.push(skill);
+    }
+    Ok(())
+}
+
+fn merge_file_entries(
+    destination: &mut Vec<FileEntry>,
+    ids: &mut HashSet<String>,
+    singular: &str,
+    discovered: Vec<FileEntry>,
+) -> Result<()> {
+    for entry in discovered {
+        if !ids.insert(entry.id.clone()) {
+            bail!("duplicate {singular} id `{}`", entry.id);
+        }
+        destination.push(entry);
+    }
+    Ok(())
+}
+
+fn discover_skills(root: &Path, discovery_root: &Path) -> Result<Vec<SkillEntry>> {
+    let skills_relative_root = discovery_root.join("skills");
+    let skills_root = root.join(&skills_relative_root);
     if !skills_root.exists() {
         return Ok(Vec::new());
     }
     if !skills_root.is_dir() {
-        bail!("`skills/` must be a directory");
+        bail!("`{}` must be a directory", skills_relative_root.display());
     }
 
     let mut skills = Vec::new();
-    let mut ids = HashSet::new();
     for entry in fs::read_dir(&skills_root)
         .with_context(|| format!("failed to read {}", skills_root.display()))?
     {
@@ -173,14 +272,14 @@ fn discover_skills(root: &Path) -> Result<Vec<SkillEntry>> {
         }
         let file_type = entry.file_type()?;
         if !file_type.is_dir() {
-            bail!("`skills/` entries must be directories");
+            bail!(
+                "`{}` entries must be directories",
+                skills_relative_root.display()
+            );
         }
 
         let id = entry.file_name().to_string_lossy().to_string();
-        if !ids.insert(id.clone()) {
-            bail!("duplicate skill id `{id}`");
-        }
-        let relative = PathBuf::from("skills").join(&id);
+        let relative = skills_relative_root.join(&id);
         let skill_dir = canonicalize_existing_path(&root.join(&relative))?;
         if !skill_dir.starts_with(root) {
             bail!("skill `{id}` escapes the package root");
@@ -195,20 +294,21 @@ fn discover_skills(root: &Path) -> Result<Vec<SkillEntry>> {
 
 fn discover_files(
     root: &Path,
+    discovery_root: &Path,
     directory: &str,
     markdown_only: bool,
     recursive: bool,
 ) -> Result<Vec<FileEntry>> {
-    let dir_root = root.join(directory);
+    let dir_relative_root = discovery_root.join(directory);
+    let dir_root = root.join(&dir_relative_root);
     if !dir_root.exists() {
         return Ok(Vec::new());
     }
     if !dir_root.is_dir() {
-        bail!("`{directory}/` must be a directory");
+        bail!("`{}` must be a directory", dir_relative_root.display());
     }
 
     let mut items = Vec::new();
-    let mut ids = HashSet::new();
     let walker = if recursive {
         walkdir::WalkDir::new(&dir_root).min_depth(1)
     } else {
@@ -228,22 +328,22 @@ fn discover_files(
             continue;
         }
         if !entry.file_type().is_file() {
-            bail!("`{directory}/` entries must be files");
+            bail!("`{}` entries must be files", dir_relative_root.display());
         }
 
         if markdown_only && path.extension().and_then(|ext| ext.to_str()) != Some("md") {
-            bail!("`{directory}/` entries must use the `.md` extension");
+            bail!(
+                "`{}` entries must use the `.md` extension",
+                dir_relative_root.display()
+            );
         }
 
         let relative = path
             .strip_prefix(&dir_root)
             .with_context(|| format!("failed to make {} relative", path.display()))?;
         let id = derive_file_entry_id(relative)?;
-        if !ids.insert(id.clone()) {
-            bail!("duplicate {directory} id `{id}`");
-        }
 
-        let relative = PathBuf::from(directory).join(relative);
+        let relative = dir_relative_root.join(relative);
         let canonical = canonicalize_existing_path(&root.join(&relative))?;
         if !canonical.starts_with(root) {
             bail!("`{directory}` item `{id}` escapes the package root");
@@ -362,6 +462,8 @@ pub(super) fn collect_ignored_field_warnings(table: &Table) -> Vec<String> {
         "api_version",
         "name",
         "version",
+        "content_roots",
+        "publish_root",
         "capabilities",
         "adapters",
         "launch_hooks",
