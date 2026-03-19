@@ -30,13 +30,13 @@ Nodus is for the repo that wants to consume agent packages without stitching run
 Point it at a GitHub repo or local path and Nodus will resolve the package, pin the dependency, lock the exact revision in `nodus.lock`, snapshot the package into a shared local store, and write only the managed files your selected adapters need.
 
 ```bash
-nodus add obra/superpowers --adapter codex
-nodus add obra/superpowers --dev --adapter codex
-nodus add obra/superpowers --adapter claude --component skills
-nodus info obra/superpowers
+nodus add WendellXY/nodus --adapter codex
+nodus add WendellXY/nodus --dev --adapter codex
+nodus add WendellXY/nodus --adapter claude --component skills
+nodus info WendellXY/nodus
 nodus outdated
 nodus update
-nodus relay superpowers --repo-path ../superpowers
+nodus relay nodus --repo-path ../nodus
 nodus doctor
 nodus completion zsh > ~/.zsh/completions/_nodus
 ```
@@ -121,13 +121,13 @@ nodus init
 Then add a package:
 
 ```bash
-nodus add obra/superpowers --adapter codex
+nodus add WendellXY/nodus --adapter codex
 ```
 
 To install only selected artifact kinds from that package:
 
 ```bash
-nodus add obra/superpowers --adapter claude --component skills --component rules
+nodus add WendellXY/nodus --adapter claude --component skills --component rules
 ```
 
 That one command:
@@ -171,13 +171,13 @@ nodus --store-path /tmp/nodus-store sync
 Remove a configured dependency and prune its managed outputs:
 
 ```bash
-nodus remove superpowers
+nodus remove nodus
 ```
 
 If you maintain a dependency repo locally and want to relay managed edits back into that checkout:
 
 ```bash
-nodus relay superpowers --repo-path ../superpowers
+nodus relay nodus --repo-path ../nodus
 ```
 
 After setup, your repo has a pinned dependency in `nodus.toml`, exact resolved state in `nodus.lock`, and managed runtime files under the adapter root you selected.
@@ -236,7 +236,7 @@ A minimal consumer manifest looks like:
 enabled = ["codex"]
 
 [dependencies]
-superpowers = { github = "obra/superpowers", tag = "v0.1.0" }
+nodus = { github = "WendellXY/nodus", tag = "v0.3.2" }
 ```
 
 If this repo also publishes AI-plugin assets from additional folders, you can
@@ -256,7 +256,7 @@ You can optionally filter which artifact kinds a dependency contributes:
 
 ```toml
 [dependencies]
-superpowers = { github = "obra/superpowers", tag = "v5.0.2", components = ["skills"] }
+nodus = { github = "WendellXY/nodus", tag = "v0.3.2", components = ["skills"] }
 ```
 
 You can also use local path dependencies:
@@ -285,7 +285,7 @@ You can also pin a dependency to an exact Git commit:
 
 ```toml
 [dependencies]
-superpowers = { github = "obra/superpowers", revision = "0123456789abcdef0123456789abcdef01234567" }
+nodus = { github = "WendellXY/nodus", revision = "0123456789abcdef0123456789abcdef01234567" }
 ```
 
 You can also declare direct managed file or directory mappings for a root-manifest dependency:
@@ -434,7 +434,7 @@ nodus --store-path /tmp/nodus-store add <url>
 
 Behavior:
 
-- accepts a full Git URL or a GitHub shortcut like `obra/superpowers`
+- accepts a full Git URL or a GitHub shortcut like `WendellXY/nodus`
 - infers the dependency alias from the repo name
 - fetches a shared bare mirror into the shared store root
 - materializes a shared checkout for the resolved revision under the shared store root
@@ -450,7 +450,7 @@ Behavior:
 Example:
 
 ```bash
-nodus add obra/superpowers
+nodus add WendellXY/nodus
 ```
 
 ### `nodus init`
@@ -468,11 +468,11 @@ Displays resolved package metadata without modifying the current project.
 Examples:
 
 ```bash
-nodus info obra/superpowers
-nodus info ./vendor/superpowers
-nodus info superpowers
-nodus info obra/superpowers --tag v0.4.0
-nodus info obra/superpowers --branch main
+nodus info WendellXY/nodus
+nodus info ./vendor/nodus
+nodus info nodus
+nodus info WendellXY/nodus --tag v0.3.2
+nodus info WendellXY/nodus --branch main
 ```
 
 Behavior:
@@ -536,11 +536,11 @@ Behavior:
 Example:
 
 ```bash
-nodus relay superpowers --repo-path ../superpowers
-nodus relay superpowers internal-tools docs-kit
-nodus relay superpowers --via claude
-nodus relay superpowers internal-tools --watch
-nodus relay superpowers --watch
+nodus relay nodus --repo-path ../nodus
+nodus relay nodus internal-tools docs-kit
+nodus relay nodus --via claude
+nodus relay nodus internal-tools --watch
+nodus relay nodus --watch
 ```
 
 ### `nodus sync`

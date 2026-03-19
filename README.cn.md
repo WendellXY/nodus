@@ -30,11 +30,11 @@ Nodus 面向这样一类仓库：希望消费 agent package，但不想手动拼
 你只需要把它指向一个 GitHub 仓库或本地路径，Nodus 就会解析包、固定依赖、把精确修订版本锁进 `nodus.lock`、将包内容快照到共享本地存储中，并只写入你所选适配器真正需要的受管理文件。
 
 ```bash
-nodus add obra/superpowers --adapter codex
-nodus add obra/superpowers --dev --adapter codex
-nodus add obra/superpowers --adapter claude --component skills
-nodus info obra/superpowers
-nodus relay superpowers --repo-path ../superpowers
+nodus add WendellXY/nodus --adapter codex
+nodus add WendellXY/nodus --dev --adapter codex
+nodus add WendellXY/nodus --adapter claude --component skills
+nodus info WendellXY/nodus
+nodus relay nodus --repo-path ../nodus
 nodus doctor
 nodus completion zsh > ~/.zsh/completions/_nodus
 ```
@@ -121,13 +121,13 @@ nodus init
 然后添加一个包：
 
 ```bash
-nodus add obra/superpowers --adapter codex
+nodus add WendellXY/nodus --adapter codex
 ```
 
 如果只想安装该包中的部分制品类型：
 
 ```bash
-nodus add obra/superpowers --adapter claude --component skills --component rules
+nodus add WendellXY/nodus --adapter claude --component skills --component rules
 ```
 
 这一条命令会：
@@ -171,13 +171,13 @@ nodus --store-path /tmp/nodus-store sync
 移除已配置的依赖，并清理它对应的受管理输出：
 
 ```bash
-nodus remove superpowers
+nodus remove nodus
 ```
 
 如果你在本地维护某个依赖仓库，并希望把受管理运行时目录中的修改回写到该仓库：
 
 ```bash
-nodus relay superpowers --repo-path ../superpowers
+nodus relay nodus --repo-path ../nodus
 ```
 
 完成设置后，你的仓库会在 `nodus.toml` 中拥有固定依赖，在 `nodus.lock` 中拥有精确解析状态，并在你选择的适配器根目录下拥有受管理的运行时文件。
@@ -229,7 +229,7 @@ Nodus 当前支持：
 enabled = ["codex"]
 
 [dependencies]
-superpowers = { github = "obra/superpowers", tag = "v0.1.0" }
+nodus = { github = "WendellXY/nodus", tag = "v0.3.2" }
 ```
 
 如果这个仓库还希望从额外目录发布 AI 插件资产，可以声明追加的内容根目录，并按需把根项目自身发现到的资产同步到本地运行时目录：
@@ -245,7 +245,7 @@ publish_root = true
 
 ```toml
 [dependencies]
-superpowers = { github = "obra/superpowers", tag = "v5.0.2", components = ["skills"] }
+nodus = { github = "WendellXY/nodus", tag = "v0.3.2", components = ["skills"] }
 ```
 
 你也可以使用本地路径依赖：
@@ -273,7 +273,7 @@ axiom = { github = "CharlesWiltgen/Axiom", branch = "main", version = "2.34.0" }
 
 ```toml
 [dependencies]
-superpowers = { github = "obra/superpowers", revision = "0123456789abcdef0123456789abcdef01234567" }
+nodus = { github = "WendellXY/nodus", revision = "0123456789abcdef0123456789abcdef01234567" }
 ```
 
 你也可以为根清单中的直接依赖声明托管文件或目录映射：
@@ -415,7 +415,7 @@ nodus --store-path /tmp/nodus-store add <url>
 
 行为：
 
-- 接受完整 Git URL，或 `obra/superpowers` 这样的 GitHub 简写
+- 接受完整 Git URL，或 `WendellXY/nodus` 这样的 GitHub 简写
 - 从仓库名推导依赖别名
 - 将共享 bare mirror 拉取到共享存储根目录中
 - 在共享存储根目录下为已解析修订版本物化共享检出
@@ -431,7 +431,7 @@ nodus --store-path /tmp/nodus-store add <url>
 示例：
 
 ```bash
-nodus add obra/superpowers
+nodus add WendellXY/nodus
 ```
 
 ### `nodus init`
@@ -449,11 +449,11 @@ nodus info <package>
 示例：
 
 ```bash
-nodus info obra/superpowers
-nodus info ./vendor/superpowers
-nodus info superpowers
-nodus info obra/superpowers --tag v0.4.0
-nodus info obra/superpowers --branch main
+nodus info WendellXY/nodus
+nodus info ./vendor/nodus
+nodus info nodus
+nodus info WendellXY/nodus --tag v0.3.2
+nodus info WendellXY/nodus --branch main
 ```
 
 行为：
@@ -494,11 +494,11 @@ nodus relay <dependency>... [--repo-path <path>] [--via <adapter>] [--watch]
 示例：
 
 ```bash
-nodus relay superpowers --repo-path ../superpowers
-nodus relay superpowers internal-tools docs-kit
-nodus relay superpowers --via claude
-nodus relay superpowers internal-tools --watch
-nodus relay superpowers --watch
+nodus relay nodus --repo-path ../nodus
+nodus relay nodus internal-tools docs-kit
+nodus relay nodus --via claude
+nodus relay nodus internal-tools --watch
+nodus relay nodus --watch
 ```
 
 ### `nodus sync`

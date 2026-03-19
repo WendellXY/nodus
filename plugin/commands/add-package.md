@@ -16,8 +16,8 @@ Add a Nodus dependency to the current workspace without manually copying runtime
 ## Examples
 
 ```bash
-nodus add obra/superpowers --adapter codex
-nodus add obra/superpowers --adapter claude --component skills --component rules
+nodus add WendellXY/nodus --adapter codex
+nodus add WendellXY/nodus --adapter claude --component skills --component rules
 nodus add ../local-package --adapter opencode
 nodus doctor
 ```
