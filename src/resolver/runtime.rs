@@ -375,10 +375,23 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
 
     let lockfile_path = cwd.join(LOCKFILE_NAME);
     let existing_lockfile = if lockfile_path.exists() {
-        Some(Lockfile::read(&lockfile_path)?)
+        Some(if sync_mode.checks_lockfile() {
+            Lockfile::read(&lockfile_path)?
+        } else {
+            Lockfile::read_for_sync(&lockfile_path)?
+        })
     } else {
         None
     };
+    if let Some(lockfile) = existing_lockfile.as_ref() {
+        if !lockfile.uses_current_schema() {
+            reporter.note(format!(
+                "upgrading {LOCKFILE_NAME} from version {} to {}",
+                lockfile.version,
+                Lockfile::current_version()
+            ))?;
+        }
+    }
     if sync_mode.installs_from_lockfile() && existing_lockfile.is_none() {
         bail!(
             "`--frozen` requires an existing {} in {}",
@@ -1840,7 +1853,11 @@ fn path_is_owned(path: &Path, owned_paths: &HashSet<PathBuf>) -> bool {
 
 fn load_owned_paths(project_root: &Path, lockfile: Option<&Lockfile>) -> Result<HashSet<PathBuf>> {
     if let Some(lockfile) = lockfile {
-        return lockfile.managed_paths(project_root);
+        return if lockfile.uses_current_schema() {
+            lockfile.managed_paths(project_root)
+        } else {
+            lockfile.managed_paths_for_sync(project_root)
+        };
     }
 
     Ok(HashSet::new())
@@ -3314,6 +3331,130 @@ shared = { path = "vendor/shared" }
         sync_all(temp.path(), cache.path());
 
         assert!(temp.path().join(LOCKFILE_NAME).exists());
+    }
+
+    #[test]
+    fn sync_upgrades_legacy_lockfile_and_prunes_legacy_runtime_outputs() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+        write_file(
+            &temp.path().join("vendor/shared/agents/security.md"),
+            "# Security\n",
+        );
+        write_file(
+            &temp.path().join("vendor/shared/commands/build.txt"),
+            "cargo test\n",
+        );
+
+        sync_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            false,
+            false,
+            &[Adapter::Claude, Adapter::OpenCode],
+        )
+        .unwrap();
+
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+        let dependency = resolution
+            .packages
+            .iter()
+            .find(|package| package.alias == "shared")
+            .unwrap();
+        let managed_skill_id = namespaced_skill_id(dependency, "review");
+        let managed_agent_file = namespaced_file_name(dependency, "security", "md");
+        let managed_command_file = namespaced_file_name(dependency, "build", "md");
+
+        fs::rename(
+            temp.path()
+                .join(format!(".claude/agents/{managed_agent_file}")),
+            temp.path().join(".claude/agents/security.md"),
+        )
+        .unwrap();
+        fs::rename(
+            temp.path()
+                .join(format!(".claude/commands/{managed_command_file}")),
+            temp.path().join(".claude/commands/build.md"),
+        )
+        .unwrap();
+        fs::rename(
+            temp.path()
+                .join(format!(".opencode/agents/{managed_agent_file}")),
+            temp.path().join(".opencode/agents/security.md"),
+        )
+        .unwrap();
+        fs::rename(
+            temp.path()
+                .join(format!(".opencode/commands/{managed_command_file}")),
+            temp.path().join(".opencode/commands/build.md"),
+        )
+        .unwrap();
+        fs::rename(
+            temp.path()
+                .join(format!(".opencode/skills/{managed_skill_id}")),
+            temp.path().join(".opencode/skills/review"),
+        )
+        .unwrap();
+
+        let current_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+        Lockfile {
+            version: 4,
+            packages: current_lockfile.packages,
+            managed_files: current_lockfile.managed_files,
+        }
+        .write(&temp.path().join(LOCKFILE_NAME))
+        .unwrap();
+
+        sync_in_dir_with_adapters(
+            temp.path(),
+            cache.path(),
+            false,
+            false,
+            &[Adapter::Claude, Adapter::OpenCode],
+        )
+        .unwrap();
+
+        let upgraded_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+
+        assert_eq!(upgraded_lockfile.version, Lockfile::current_version());
+        assert!(
+            temp.path()
+                .join(format!(".claude/agents/{managed_agent_file}"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".claude/commands/{managed_command_file}"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".opencode/agents/{managed_agent_file}"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".opencode/commands/{managed_command_file}"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".opencode/skills/{managed_skill_id}"))
+                .exists()
+        );
+        assert!(!temp.path().join(".claude/agents/security.md").exists());
+        assert!(!temp.path().join(".claude/commands/build.md").exists());
+        assert!(!temp.path().join(".opencode/agents/security.md").exists());
+        assert!(!temp.path().join(".opencode/commands/build.md").exists());
+        assert!(!temp.path().join(".opencode/skills/review").exists());
     }
 
     #[test]

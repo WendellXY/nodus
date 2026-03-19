@@ -11,6 +11,7 @@ use crate::store::write_atomic;
 
 pub const LOCKFILE_NAME: &str = "nodus.lock";
 const LOCKFILE_VERSION: u32 = 6;
+const MIN_SYNC_COMPATIBLE_LOCKFILE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lockfile {
@@ -82,19 +83,44 @@ impl Lockfile {
     }
 
     pub fn read(path: &Path) -> Result<Self> {
+        let lockfile = Self::read_unvalidated(path)?;
+        lockfile.ensure_current_version(path)?;
+        Ok(lockfile)
+    }
+
+    pub fn read_for_sync(path: &Path) -> Result<Self> {
+        let lockfile = Self::read_unvalidated(path)?;
+        lockfile.ensure_sync_compatible_version(path)?;
+        Ok(lockfile)
+    }
+
+    pub const fn current_version() -> u32 {
+        LOCKFILE_VERSION
+    }
+
+    pub const fn uses_current_schema(&self) -> bool {
+        self.version == LOCKFILE_VERSION
+    }
+
+    pub fn managed_paths_for_sync(&self, project_root: &Path) -> Result<HashSet<PathBuf>> {
+        let mut managed_paths = self.managed_paths(project_root)?;
+        if self.uses_current_schema() {
+            return Ok(managed_paths);
+        }
+
+        for relative in &self.managed_files {
+            let relative_path = Self::validate_managed_relative(relative, project_root)?;
+            managed_paths.insert(project_root.join(relative_path));
+        }
+
+        Ok(managed_paths)
+    }
+
+    fn read_unvalidated(path: &Path) -> Result<Self> {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("failed to read lockfile {}", path.display()))?;
-        let lockfile: Self = toml::from_str(&contents)
-            .with_context(|| format!("failed to parse lockfile {}", path.display()))?;
-        if lockfile.version != LOCKFILE_VERSION {
-            bail!(
-                "unsupported lockfile version {} in {}; expected {}",
-                lockfile.version,
-                path.display(),
-                LOCKFILE_VERSION
-            );
-        }
-        Ok(lockfile)
+        toml::from_str(&contents)
+            .with_context(|| format!("failed to parse lockfile {}", path.display()))
     }
 
     #[cfg(test)]
@@ -117,6 +143,33 @@ impl Lockfile {
         }
 
         Ok(managed_paths)
+    }
+
+    fn ensure_current_version(&self, path: &Path) -> Result<()> {
+        if self.version != LOCKFILE_VERSION {
+            bail!(
+                "unsupported lockfile version {} in {}; expected {}",
+                self.version,
+                path.display(),
+                LOCKFILE_VERSION
+            );
+        }
+
+        Ok(())
+    }
+
+    fn ensure_sync_compatible_version(&self, path: &Path) -> Result<()> {
+        if !(MIN_SYNC_COMPATIBLE_LOCKFILE_VERSION..=LOCKFILE_VERSION).contains(&self.version) {
+            bail!(
+                "unsupported lockfile version {} in {}; expected {} through {}",
+                self.version,
+                path.display(),
+                MIN_SYNC_COMPATIBLE_LOCKFILE_VERSION,
+                LOCKFILE_VERSION
+            );
+        }
+
+        Ok(())
     }
 
     fn validate_managed_relative<'a>(relative: &'a str, project_root: &Path) -> Result<&'a Path> {
@@ -305,6 +358,69 @@ managed_files = []
         let error = Lockfile::read(&path).unwrap_err().to_string();
 
         assert!(error.contains("unsupported lockfile version 5"));
+    }
+
+    #[test]
+    fn read_for_sync_accepts_legacy_lockfile_versions() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(LOCKFILE_NAME);
+        fs::write(
+            &path,
+            r#"
+version = 4
+packages = []
+managed_files = []
+"#,
+        )
+        .unwrap();
+
+        let lockfile = Lockfile::read_for_sync(&path).unwrap();
+
+        assert_eq!(lockfile.version, 4);
+    }
+
+    #[test]
+    fn managed_paths_for_sync_include_legacy_direct_paths() {
+        let lockfile = Lockfile {
+            version: 4,
+            packages: vec![LockedPackage {
+                alias: "shared".into(),
+                name: "shared".into(),
+                version_tag: Some("v0.1.0".into()),
+                source: LockedSource {
+                    kind: "git".into(),
+                    path: None,
+                    url: Some("https://github.com/example/shared".into()),
+                    tag: Some("v0.1.0".into()),
+                    branch: None,
+                    rev: Some("01f556abcdef".into()),
+                },
+                digest: "sha256:abc".into(),
+                selected_components: None,
+                skills: vec!["review".into()],
+                agents: vec!["security".into()],
+                rules: vec![],
+                commands: vec!["build".into()],
+                dependencies: vec![],
+                capabilities: vec![],
+            }],
+            managed_files: vec![
+                ".claude/skills/review".into(),
+                ".claude/agents/security.md".into(),
+                ".opencode/commands/build.md".into(),
+            ],
+        };
+
+        let managed_paths = lockfile
+            .managed_paths_for_sync(Path::new("/tmp/project"))
+            .unwrap();
+
+        assert!(managed_paths.contains(&PathBuf::from("/tmp/project/.claude/skills/review")));
+        assert!(
+            managed_paths.contains(&PathBuf::from("/tmp/project/.claude/skills/review_01f556"))
+        );
+        assert!(managed_paths.contains(&PathBuf::from("/tmp/project/.claude/agents/security.md")));
+        assert!(managed_paths.contains(&PathBuf::from("/tmp/project/.opencode/commands/build.md")));
     }
 
     #[test]
