@@ -239,6 +239,19 @@ enabled = ["codex"]
 superpowers = { github = "obra/superpowers", tag = "v0.1.0" }
 ```
 
+If this repo also publishes AI-plugin assets from additional folders, you can
+declare additive content roots and optionally mirror the root project's own
+discovered assets into local runtime folders:
+
+```toml
+content_roots = ["nodus-development"]
+publish_root = true
+```
+
+Each `content_roots` entry is resolved relative to the repo root and is scanned
+as another package source root containing optional `skills/`, `agents/`,
+`rules/`, and `commands/` subfolders.
+
 You can optionally filter which artifact kinds a dependency contributes:
 
 ```toml
@@ -306,6 +319,8 @@ justification = "Run repository checks."
 - `api_version` (optional)
 - `name` (optional)
 - `version` (optional)
+- `content_roots`
+- `publish_root`
 - `capabilities`
 - `[adapters]`
 - `adapters.enabled`
@@ -346,18 +361,26 @@ When Nodus resolves adapters from flags, detection, or a prompt, it writes `[ada
 
 ## Package Discovery
 
-Nodus validates and discovers package content by top-level folders:
+Nodus validates and discovers package content from the repo root and any
+configured `content_roots` by looking for these folders inside each discovery
+root:
 
 - `skills/<id>/SKILL.md` => skill
 - `agents/<id>.md` => agent
 - `rules/<id>.*` => rule
 - `commands/<id>.*` => command
 
-When you run Nodus in a repo root, those folders are treated as package source for consumers of that repo. Nodus does not mirror the root project's own `skills/`, `agents/`, `rules/`, or `commands/` into managed runtime folders like `.codex/` or `.claude/`; managed outputs are emitted only for resolved dependencies.
+When you run Nodus in a repo root, those folders are treated as package source
+for consumers of that repo. By default, Nodus does not mirror the root
+project's own discovered `skills/`, `agents/`, `rules/`, or `commands/` into
+managed runtime folders like `.codex/` or `.claude/`; set `publish_root = true`
+to opt into publishing the root project's discovered assets alongside resolved
+dependencies. Artifact ids must remain unique per kind across all discovery
+roots.
 
 Package validity rules:
 
-- A dependency repo must contain at least one of `skills/`, `agents/`, `rules/`, or `commands/`, or declare at least one dependency in `nodus.toml`
+- A dependency repo must contain at least one discovered `skills/`, `agents/`, `rules/`, or `commands/` entry across the repo root plus any configured `content_roots`, or declare at least one dependency in `nodus.toml`
 - Other files and directories are allowed and ignored
 - `skills/` entries must be directories
 - Each skill must contain `SKILL.md` with YAML frontmatter containing:
@@ -522,7 +545,7 @@ nodus relay superpowers --watch
 
 ### `nodus sync`
 
-Resolves the root project plus configured dependencies, recursively follows nested dependencies declared in dependency manifests, snapshots their discovered content, writes `nodus.lock`, and emits managed runtime outputs for resolved dependencies.
+Resolves the root project plus configured dependencies, recursively follows nested dependencies declared in dependency manifests, snapshots their discovered content, writes `nodus.lock`, and emits managed runtime outputs for resolved dependencies plus the root project when `publish_root = true`.
 
 Options:
 

@@ -232,6 +232,15 @@ enabled = ["codex"]
 superpowers = { github = "obra/superpowers", tag = "v0.1.0" }
 ```
 
+如果这个仓库还希望从额外目录发布 AI 插件资产，可以声明追加的内容根目录，并按需把根项目自身发现到的资产同步到本地运行时目录：
+
+```toml
+content_roots = ["nodus-development"]
+publish_root = true
+```
+
+每个 `content_roots` 条目都相对于仓库根目录解析，并会被当作另一个包源码根目录来扫描，其中可以包含可选的 `skills/`、`agents/`、`rules/` 和 `commands/` 子目录。
+
 你也可以选择性过滤某个依赖贡献的制品类型：
 
 ```toml
@@ -298,6 +307,8 @@ justification = "Run repository checks."
 - `api_version`（可选）
 - `name`（可选）
 - `version`（可选）
+- `content_roots`
+- `publish_root`
 - `capabilities`
 - `[adapters]`
 - `adapters.enabled`
@@ -338,18 +349,18 @@ Nodus 只会为选中的适配器生成输出。解析顺序如下：
 
 ## 包发现
 
-Nodus 通过顶层目录校验并发现包内容：
+Nodus 会在仓库根目录以及任何已配置的 `content_roots` 中查找下列目录，并据此校验和发现包内容：
 
 - `skills/<id>/SKILL.md` => skill
 - `agents/<id>.md` => agent
 - `rules/<id>.*` => rule
 - `commands/<id>.*` => command
 
-当你在仓库根目录运行 Nodus 时，这些目录会被视为该仓库提供给消费者的包源码。Nodus 不会把根项目自身的 `skills/`、`agents/`、`rules/` 或 `commands/` 镜像到 `.codex/` 或 `.claude/` 这样的受管理运行时目录中；受管理输出只会针对已解析的依赖生成。
+当你在仓库根目录运行 Nodus 时，这些目录会被视为该仓库提供给消费者的包源码。默认情况下，Nodus 不会把根项目自身发现到的 `skills/`、`agents/`、`rules/` 或 `commands/` 镜像到 `.codex/` 或 `.claude/` 这样的受管理运行时目录中；如果设置 `publish_root = true`，则会把根项目发现到的资产和已解析依赖一起发布。所有发现根目录中的同类制品 id 都必须保持唯一。
 
 包有效性规则：
 
-- 依赖仓库必须至少包含 `skills/`、`agents/`、`rules/`、`commands/` 之一，或者在 `nodus.toml` 中声明至少一个依赖
+- 依赖仓库必须在仓库根目录及任何已配置的 `content_roots` 中，至少发现一个 `skills/`、`agents/`、`rules/` 或 `commands/` 条目，或者在 `nodus.toml` 中声明至少一个依赖
 - 其他文件和目录允许存在，并会被忽略
 - `skills/` 下的条目必须是目录
 - 每个 skill 都必须包含带有 YAML frontmatter 的 `SKILL.md`，其中包含：
@@ -492,7 +503,7 @@ nodus relay superpowers --watch
 
 ### `nodus sync`
 
-解析根项目及其已配置依赖，递归跟随依赖清单中声明的嵌套依赖，对发现的内容生成快照，写入 `nodus.lock`，并为已解析依赖生成受管理的运行时输出。
+解析根项目及其已配置依赖，递归跟随依赖清单中声明的嵌套依赖，对发现的内容生成快照，写入 `nodus.lock`，并为已解析依赖生成受管理的运行时输出；如果设置了 `publish_root = true`，也会同时发布根项目自身发现到的内容。
 
 选项：
 

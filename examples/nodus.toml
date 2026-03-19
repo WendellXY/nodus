@@ -19,6 +19,17 @@ name = "acme-agent-workspace"
 # This is metadata only; dependency pinning still happens per dependency below.
 version = "0.1.0"
 
+# Optional additive package source roots relative to the repo root.
+# Each listed directory is scanned like another Nodus AI-plugin root and may
+# contain its own `skills/`, `agents/`, `rules/`, and `commands/` folders.
+content_roots = ["nodus-development"]
+
+# Optional opt-in for publishing this root project's discovered AI assets into
+# adapter runtime folders during `nodus sync`.
+# Leave this `false` or omit it if the root repo should act only as source for
+# downstream consumers.
+publish_root = true
+
 [adapters]
 # Pick the runtime folders Nodus should manage in this repo.
 # Supported values: "agents", "claude", "codex", "cursor", "opencode"
