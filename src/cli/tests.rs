@@ -166,8 +166,8 @@ fn parses_info_subcommand() {
 
 #[test]
 fn parses_add_version_selector() {
-    let cli = Cli::try_parse_from(["nodus", "add", "obra/superpowers", "--version", "^1.2.0"])
-        .unwrap();
+    let cli =
+        Cli::try_parse_from(["nodus", "add", "obra/superpowers", "--version", "^1.2.0"]).unwrap();
 
     match cli.command {
         Command::Add { url, version, .. } => {
@@ -531,6 +531,50 @@ tooling = { path = "vendor/tooling" }
 }
 
 #[test]
+fn list_command_emits_version_requested_ref_for_semver_dependencies() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let repo = TempDir::new().unwrap();
+    write_skill(&repo.path().join("skills/review"), "Review");
+    init_git_repo(repo.path());
+    let output = ProcessCommand::new("git")
+        .args(["tag", "v1.0.0"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    run_command_in_dir(
+        Command::Add {
+            url: repo.path().to_string_lossy().to_string(),
+            dev: false,
+            tag: None,
+            branch: None,
+            version: Some("^1.0.0".into()),
+            revision: None,
+            adapter: vec![Adapter::Codex],
+            component: vec![],
+            sync_on_launch: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let output = run_command_output(Command::List { json: true }, temp.path(), cache.path());
+    let json: Value = serde_json::from_str(&output).unwrap();
+
+    assert_eq!(json["dependencies"][0]["requested_ref"]["kind"], "version");
+    assert_eq!(json["dependencies"][0]["requested_ref"]["value"], "^1.0.0");
+}
+
+#[test]
 fn completion_help_describes_shell_argument() {
     let mut root = <Cli as clap::CommandFactory>::command();
     let help = root
@@ -793,6 +837,66 @@ fn add_command_emits_resolving_and_adding_lines() {
     assert!(output.contains("latest tag"));
     assert!(output.contains("Adding"));
     assert!(output.contains("Finished"));
+}
+
+#[test]
+fn info_command_renders_version_requirement_for_semver_dependencies() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let repo = TempDir::new().unwrap();
+    write_skill(&repo.path().join("skills/review"), "Review");
+    init_git_repo(repo.path());
+    let output = ProcessCommand::new("git")
+        .args(["tag", "v1.0.0"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    run_command_in_dir(
+        Command::Add {
+            url: repo.path().to_string_lossy().to_string(),
+            dev: false,
+            tag: None,
+            branch: None,
+            version: Some("^1.0.0".into()),
+            revision: None,
+            adapter: vec![Adapter::Claude],
+            component: vec![],
+            sync_on_launch: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let alias = crate::manifest::load_root_from_dir(temp.path())
+        .unwrap()
+        .manifest
+        .dependencies
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    let output = run_command_output(
+        Command::Info {
+            package: alias,
+            tag: None,
+            branch: None,
+            json: false,
+        },
+        temp.path(),
+        cache.path(),
+    );
+
+    assert!(output.contains("version-requirement: ^1.0.0"));
+    assert!(output.contains("source:"));
 }
 
 #[test]

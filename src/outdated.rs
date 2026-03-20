@@ -719,6 +719,43 @@ mod tests {
     }
 
     #[test]
+    fn reports_semver_compatible_updates_and_major_availability() {
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+        run_git(repo.path(), &["tag", "v1.0.0"]);
+
+        let (reporter, _) = make_reporter();
+        add_dependency_in_dir_with_adapters(
+            project.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            crate::git::AddDependencyOptions {
+                git_ref: None,
+                version_req: Some(semver::VersionReq::parse("^1.0.0").unwrap()),
+                kind: DependencyKind::Dependency,
+                adapters: &[Adapter::Codex],
+                components: &[],
+                sync_on_launch: false,
+            },
+            &reporter,
+        )
+        .unwrap();
+
+        run_git(repo.path(), &["tag", "v1.2.0"]);
+        run_git(repo.path(), &["tag", "v2.0.0"]);
+
+        let (reporter, output) = make_reporter();
+        let summary = check_outdated_in_dir(project.path(), cache.path(), &reporter).unwrap();
+
+        assert_eq!(summary.outdated_count, 1);
+        assert!(output.contents().contains("compatible update for ^1.0.0"));
+        assert!(output.contents().contains("latest overall v2.0.0"));
+    }
+
+    #[test]
     fn json_reports_include_dev_dependency_kind() {
         let project = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();

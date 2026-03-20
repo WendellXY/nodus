@@ -132,7 +132,11 @@ fn add_dependency_in_dir_with_adapters_mode(
             github: github.clone(),
             url: github.is_none().then_some(checkout.url.clone()),
             path: None,
-            tag: checkout.tag.clone(),
+            tag: options
+                .version_req
+                .is_none()
+                .then_some(checkout.tag.clone())
+                .flatten(),
             branch: checkout.branch.clone(),
             revision: options.git_ref.and_then(|git_ref| match git_ref {
                 RequestedGitRef::Revision(_) => Some(checkout.rev.clone()),
@@ -446,9 +450,10 @@ fn latest_compatible_tag_name(path: &Path, requirement: &VersionReq) -> Result<O
 }
 
 pub fn parse_semver_tag(tag: &str) -> Option<Version> {
-    Version::parse(tag)
-        .ok()
-        .or_else(|| tag.strip_prefix('v').and_then(|value| Version::parse(value).ok()))
+    Version::parse(tag).ok().or_else(|| {
+        tag.strip_prefix('v')
+            .and_then(|value| Version::parse(value).ok())
+    })
 }
 
 pub fn default_branch(path: &Path) -> Result<String> {

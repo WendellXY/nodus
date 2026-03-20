@@ -5,7 +5,9 @@ use anyhow::{Result, bail};
 use rayon::prelude::*;
 
 use crate::execution::ExecutionMode;
-use crate::git::{ensure_git_dependency, latest_compatible_tag, latest_tag, prepare_repository_mirror};
+use crate::git::{
+    ensure_git_dependency, latest_compatible_tag, latest_tag, prepare_repository_mirror,
+};
 use crate::lockfile::Lockfile;
 use crate::manifest::{
     DependencyKind, DependencySourceKind, DependencySpec, PackageRole, RequestedGitRef,
@@ -256,14 +258,14 @@ fn plan_dependency_updates(
                         }
                     }
                     RequestedGitRef::VersionReq(requirement) => {
-                        let latest_tag = match compatible_tag_updates.get(&requirement.to_string()) {
+                        let latest_tag = match compatible_tag_updates.get(&requirement.to_string())
+                        {
                             Some(tag) => tag.clone(),
                             None => {
                                 let mirror =
                                     prepare_repository_mirror(cache_root, &url, true, &reporter)?;
                                 let tag = latest_compatible_tag(&mirror, requirement)?;
-                                compatible_tag_updates
-                                    .insert(requirement.to_string(), tag.clone());
+                                compatible_tag_updates.insert(requirement.to_string(), tag.clone());
                                 tag
                             }
                         };
@@ -582,6 +584,58 @@ mod tests {
 
         assert_eq!(summary.updated_count, 1);
         assert_eq!(dependency.tag.as_deref(), Some("v0.2.0"));
+    }
+
+    #[test]
+    fn updates_semver_managed_dependencies_within_requirement() {
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_skill(&repo.path().join("skills/review"), "Review");
+        init_git_repo(repo.path());
+        run_git(repo.path(), &["tag", "v1.0.0"]);
+
+        add_dependency_in_dir_with_adapters(
+            project.path(),
+            cache.path(),
+            &repo.path().to_string_lossy(),
+            crate::git::AddDependencyOptions {
+                git_ref: None,
+                version_req: Some(semver::VersionReq::parse("^1.0.0").unwrap()),
+                kind: DependencyKind::Dependency,
+                adapters: &[Adapter::Codex],
+                components: &[],
+                sync_on_launch: false,
+            },
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        run_git(repo.path(), &["tag", "v1.2.0"]);
+        run_git(repo.path(), &["tag", "v2.0.0"]);
+
+        let summary = update_direct_dependencies_in_dir(
+            project.path(),
+            cache.path(),
+            false,
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        let manifest =
+            fs::read_to_string(project.path().join(crate::manifest::MANIFEST_FILE)).unwrap();
+        let lockfile =
+            Lockfile::read(&project.path().join(crate::lockfile::LOCKFILE_NAME)).unwrap();
+        let dependency = lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias != "root")
+            .unwrap();
+
+        assert_eq!(summary.updated_count, 1);
+        assert!(manifest.contains("version = \"^1.0.0\""));
+        assert!(!manifest.contains("tag = "));
+        assert_eq!(dependency.source.tag.as_deref(), Some("v1.2.0"));
     }
 
     #[test]
