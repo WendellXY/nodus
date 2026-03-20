@@ -216,14 +216,7 @@ fn accepts_dependency_repo_with_claude_marketplace_wrapper() {
         Some(Path::new("./.claude-plugin/plugins/axiom"))
     );
     assert_eq!(dependency.tag, None);
-    assert_eq!(
-        dependency
-            .version
-            .as_ref()
-            .map(ToString::to_string)
-            .as_deref(),
-        Some("2.34.0")
-    );
+    assert!(dependency.version.is_none());
     assert_eq!(
         loaded.manifest.version,
         Some(Version::parse("2.34.0").unwrap())
@@ -790,7 +783,7 @@ fn serializes_dependencies_as_inline_tables() {
     assert!(encoded.contains("[dependencies]"));
     assert!(encoded.contains("playbook_ios = {"));
     assert!(encoded.contains("github = \"wenext-limited/playbook-ios\""));
-    assert!(encoded.contains("version = \"0.1.0\""));
+    assert!(encoded.contains("version = \"^0.1.0\""));
     assert!(encoded.contains("components = [\"skills\", \"rules\"]"));
     assert!(!encoded.contains("url = "));
 }

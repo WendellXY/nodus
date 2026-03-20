@@ -2819,14 +2819,7 @@ leaf = {{ url = "{}", tag = "v0.1.0" }}
         let dependency = manifest.manifest.dependencies.values().next().unwrap();
         assert_eq!(dependency.tag, None);
         assert_eq!(dependency.branch.as_deref(), Some("main"));
-        assert_eq!(
-            dependency
-                .version
-                .as_ref()
-                .map(ToString::to_string)
-                .as_deref(),
-            Some("2.34.0")
-        );
+        assert!(dependency.version.is_none());
     }
 
     #[test]
