@@ -812,7 +812,6 @@ fn watch_dependencies_in_dir_impl_with_options(
             ))?;
             summaries.push(summary);
         }
-        state = capture_watch_state(project_root, cache_root, packages, reporter)?;
     }
 }
 
