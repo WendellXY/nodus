@@ -551,8 +551,49 @@ fn validate_mcp_server(server_id: &str, server: &McpServerConfig) -> Result<()> 
     if server_id.trim().is_empty() {
         bail!("manifest field `mcp_servers` contains an empty server id");
     }
-    if server.command.trim().is_empty() {
+    if server
+        .command
+        .as_deref()
+        .is_some_and(|command| command.trim().is_empty())
+    {
         bail!("manifest field `mcp_servers.{server_id}.command` must not be empty");
+    }
+    if server
+        .url
+        .as_deref()
+        .is_some_and(|url| url.trim().is_empty())
+    {
+        bail!("manifest field `mcp_servers.{server_id}.url` must not be empty");
+    }
+    match (
+        server
+            .command
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        server
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    ) {
+        (Some(_), None) => {}
+        (None, Some(_)) => {}
+        (None, None) => {
+            bail!("manifest field `mcp_servers.{server_id}` must declare either `command` or `url`")
+        }
+        (Some(_), Some(_)) => {
+            bail!(
+                "manifest field `mcp_servers.{server_id}` must not declare both `command` and `url`"
+            )
+        }
+    }
+    if server.url.is_some()
+        && (!server.args.is_empty() || !server.env.is_empty() || server.cwd.is_some())
+    {
+        bail!(
+            "manifest field `mcp_servers.{server_id}` must not combine `url` with `args`, `env`, or `cwd`"
+        );
     }
     if let Some(cwd) = &server.cwd
         && cwd.as_os_str().is_empty()
@@ -565,7 +606,14 @@ fn validate_mcp_server(server_id: &str, server: &McpServerConfig) -> Result<()> 
         }
     }
 
-    if server.command.contains("${CLAUDE_PLUGIN_ROOT}")
+    if server
+        .command
+        .as_deref()
+        .is_some_and(|command| command.contains("${CLAUDE_PLUGIN_ROOT}"))
+        || server
+            .url
+            .as_deref()
+            .is_some_and(|url| url.contains("${CLAUDE_PLUGIN_ROOT}"))
         || server
             .args
             .iter()

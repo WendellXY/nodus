@@ -288,7 +288,8 @@ fn imports_firebase_style_marketplace_mcp_servers() {
         Some(Version::parse("1.0.0").unwrap())
     );
     let server = loaded.manifest.mcp_servers.get("firebase").unwrap();
-    assert_eq!(server.command, "npx");
+    assert_eq!(server.command.as_deref(), Some("npx"));
+    assert!(server.url.is_none());
     assert_eq!(
         server.args,
         vec!["-y", "firebase-tools", "mcp", "--dir", "."]
@@ -297,6 +298,41 @@ fn imports_firebase_style_marketplace_mcp_servers() {
         server.env,
         BTreeMap::from([(String::from("IS_FIREBASE_MCP"), String::from("true"))])
     );
+}
+
+#[test]
+fn imports_firebase_style_marketplace_url_mcp_servers() {
+    let temp = TempDir::new().unwrap();
+    write_marketplace(
+        temp.path(),
+        r#"{
+  "plugins": [
+    {
+      "name": "figma",
+      "version": "1.0.0",
+      "source": "./",
+      "mcpServers": {
+        "figma": {
+          "url": "http://127.0.0.1:3845/mcp",
+          "enabled": false
+        }
+      }
+    }
+  ]
+}"#,
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.manifest.dependencies.is_empty());
+    assert_eq!(
+        loaded.manifest.version,
+        Some(Version::parse("1.0.0").unwrap())
+    );
+    let server = loaded.manifest.mcp_servers.get("figma").unwrap();
+    assert!(server.command.is_none());
+    assert_eq!(server.url.as_deref(), Some("http://127.0.0.1:3845/mcp"));
+    assert!(!server.enabled);
 }
 
 #[test]
@@ -924,10 +960,12 @@ fn serializes_mcp_servers() {
         mcp_servers: BTreeMap::from([(
             "firebase".into(),
             McpServerConfig {
-                command: "npx".into(),
+                command: Some("npx".into()),
+                url: None,
                 args: vec!["-y".into(), "firebase-tools".into()],
                 env: BTreeMap::from([(String::from("IS_FIREBASE_MCP"), String::from("true"))]),
                 cwd: Some(PathBuf::from(".")),
+                enabled: true,
             },
         )]),
         ..Manifest::default()
@@ -941,6 +979,31 @@ fn serializes_mcp_servers() {
     assert!(encoded.contains("cwd = \".\""));
     assert!(encoded.contains("[mcp_servers.firebase.env]"));
     assert!(encoded.contains("IS_FIREBASE_MCP = \"true\""));
+}
+
+#[test]
+fn serializes_url_backed_disabled_mcp_servers() {
+    let manifest = Manifest {
+        mcp_servers: BTreeMap::from([(
+            "figma".into(),
+            McpServerConfig {
+                command: None,
+                url: Some("http://127.0.0.1:3845/mcp".into()),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: None,
+                enabled: false,
+            },
+        )]),
+        ..Manifest::default()
+    };
+
+    let encoded = serialize_manifest(&manifest).unwrap();
+
+    assert!(encoded.contains("[mcp_servers.figma]"));
+    assert!(encoded.contains("url = \"http://127.0.0.1:3845/mcp\""));
+    assert!(encoded.contains("enabled = false"));
+    assert!(!encoded.contains("command = "));
 }
 
 #[test]
@@ -1204,13 +1267,34 @@ IS_FIREBASE_MCP = "true"
 
     let loaded = load_root_from_dir(temp.path()).unwrap();
     let server = loaded.manifest.mcp_servers.get("firebase").unwrap();
-    assert_eq!(server.command, "npx");
+    assert_eq!(server.command.as_deref(), Some("npx"));
+    assert!(server.url.is_none());
     assert_eq!(server.args, vec!["-y", "firebase-tools"]);
     assert_eq!(server.cwd.as_deref(), Some(Path::new(".")));
     assert_eq!(
         server.env,
         BTreeMap::from([(String::from("IS_FIREBASE_MCP"), String::from("true"))])
     );
+}
+
+#[test]
+fn parses_url_backed_mcp_servers() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[mcp_servers.figma]
+url = "http://127.0.0.1:3845/mcp"
+enabled = false
+"#,
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+    let server = loaded.manifest.mcp_servers.get("figma").unwrap();
+    assert!(server.command.is_none());
+    assert_eq!(server.url.as_deref(), Some("http://127.0.0.1:3845/mcp"));
+    assert!(!server.enabled);
 }
 
 #[test]
@@ -1360,6 +1444,40 @@ command = ""
 
     let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
     assert!(error.contains("mcp_servers.firebase.command"));
+}
+
+#[test]
+fn rejects_mcp_server_with_both_command_and_url() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[mcp_servers.firebase]
+command = "npx"
+url = "http://127.0.0.1:3845/mcp"
+"#,
+    );
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("must not declare both `command` and `url`"));
+}
+
+#[test]
+fn rejects_url_backed_mcp_server_with_stdio_fields() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[mcp_servers.firebase]
+url = "http://127.0.0.1:3845/mcp"
+args = ["--verbose"]
+"#,
+    );
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("must not combine `url` with `args`, `env`, or `cwd`"));
 }
 
 #[test]

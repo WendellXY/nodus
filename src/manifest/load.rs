@@ -107,7 +107,12 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
         }
         for (id, server) in &manifest.mcp_servers {
             output.push_str(&format!("[mcp_servers.{id}]\n"));
-            output.push_str(&format!("command = {}\n", quote(&server.command)));
+            if let Some(command) = &server.command {
+                output.push_str(&format!("command = {}\n", quote(command)));
+            }
+            if let Some(url) = &server.url {
+                output.push_str(&format!("url = {}\n", quote(url)));
+            }
             if !server.args.is_empty() {
                 let encoded = server
                     .args
@@ -119,6 +124,9 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
             }
             if let Some(cwd) = &server.cwd {
                 output.push_str(&format!("cwd = {}\n", quote(&display_path(cwd))));
+            }
+            if !server.enabled {
+                output.push_str("enabled = false\n");
             }
             if !server.env.is_empty() {
                 output.push_str("[mcp_servers.");

@@ -205,7 +205,10 @@ struct ProjectMcpConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct EmittedMcpServerConfig {
-    command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     args: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -753,6 +756,9 @@ fn mcp_config_file(
         }
 
         for (server_id, server) in &package.manifest.manifest.mcp_servers {
+            if !server.enabled {
+                continue;
+            }
             desired_servers.insert(
                 managed_mcp_server_name(&package.alias, server_id),
                 emitted_mcp_server(server),
@@ -795,6 +801,7 @@ fn read_project_mcp_config(path: &Path) -> Result<ProjectMcpConfig> {
 fn emitted_mcp_server(server: &McpServerConfig) -> EmittedMcpServerConfig {
     EmittedMcpServerConfig {
         command: server.command.clone(),
+        url: server.url.clone(),
         args: server.args.clone(),
         env: server.env.clone(),
         cwd: server.cwd.as_ref().map(|cwd| display_path(cwd)),

@@ -3588,6 +3588,73 @@ IS_FIREBASE_MCP = "true"
     }
 
     #[test]
+    fn sync_emits_url_backed_mcp_servers() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies.figma]
+path = "vendor/figma"
+"#,
+        );
+        write_file(
+            &temp.path().join("vendor/figma/nodus.toml"),
+            r#"
+[mcp_servers.figma]
+url = "http://127.0.0.1:3845/mcp"
+"#,
+        );
+
+        sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex])
+            .unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(temp.path().join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            json["mcpServers"]["figma__figma"]["url"].as_str(),
+            Some("http://127.0.0.1:3845/mcp")
+        );
+        assert!(json["mcpServers"]["figma__figma"]["command"].is_null());
+    }
+
+    #[test]
+    fn sync_omits_disabled_mcp_servers() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_manifest(
+            temp.path(),
+            r#"
+[dependencies.xcode]
+path = "vendor/xcode"
+"#,
+        );
+        write_file(
+            &temp.path().join("vendor/xcode/nodus.toml"),
+            r#"
+[mcp_servers.xcode]
+command = "xcrun"
+args = ["mcpbridge"]
+enabled = false
+"#,
+        );
+
+        sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex])
+            .unwrap();
+
+        assert!(!temp.path().join(".mcp.json").exists());
+        let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+        let xcode_package = lockfile
+            .packages
+            .iter()
+            .find(|package| package.alias == "xcode")
+            .unwrap();
+        assert_eq!(xcode_package.mcp_servers, vec!["xcode"]);
+        assert!(!lockfile.managed_files.contains(&String::from(".mcp.json")));
+    }
+
+    #[test]
     fn sync_merges_unmanaged_mcp_entries_with_managed_outputs() {
         let temp = TempDir::new().unwrap();
         let cache = cache_dir();
