@@ -1681,11 +1681,17 @@ HTTP/2 200 \r\n\
         assert!(zip_status.success());
 
         let script_body = fs::read_to_string(powershell_script_path()).unwrap();
-        let patched_script = script_body.replacen(
-            "Invoke-WebRequest -Uri $Url -OutFile $OutputPath",
-            "Copy-Item -LiteralPath (Join-Path $env:NODUS_TEST_ASSET_DIR (Split-Path -Leaf $Url)) -Destination $OutputPath -Force",
-            1,
-        );
+        let patched_script = script_body
+            .replacen(
+                "Invoke-WebRequest -Uri $Url -OutFile $OutputPath",
+                "Copy-Item -LiteralPath (Join-Path $env:NODUS_TEST_ASSET_DIR (Split-Path -Leaf $Url)) -Destination $OutputPath -Force",
+                1,
+            )
+            .replacen(
+                "$arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture",
+                "$arch = 'X64'",
+                1,
+            );
         assert_ne!(patched_script, script_body);
 
         let test_script_path = temp.path().join("install-test.ps1");
