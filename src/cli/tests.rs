@@ -248,7 +248,7 @@ fn auto_update_checks_only_run_for_interactive_human_output_commands() {
         false
     ));
     assert!(!should_auto_check_for_updates(
-        &Command::SelfUpdate,
+        &Command::Upgrade { check: false },
         true,
         false
     ));
@@ -350,10 +350,19 @@ fn parses_update_subcommand() {
 }
 
 #[test]
-fn parses_self_update_subcommand() {
-    let cli = Cli::try_parse_from(["nodus", "self-update"]).unwrap();
+fn parses_upgrade_subcommand() {
+    let cli = Cli::try_parse_from(["nodus", "upgrade"]).unwrap();
 
-    assert!(matches!(cli.command, Command::SelfUpdate));
+    assert!(matches!(cli.command, Command::Upgrade { check: false }));
+}
+
+#[test]
+fn parses_upgrade_check_flag_and_self_update_alias() {
+    let check = Cli::try_parse_from(["nodus", "upgrade", "--check"]).unwrap();
+    let alias = Cli::try_parse_from(["nodus", "self-update"]).unwrap();
+
+    assert!(matches!(check.command, Command::Upgrade { check: true }));
+    assert!(matches!(alias.command, Command::Upgrade { check: false }));
 }
 
 #[test]
@@ -402,7 +411,11 @@ fn root_help_describes_commands() {
     assert!(help.contains("Display resolved package metadata"));
     assert!(help.contains("Check configured dependencies for newer tags or branch head changes"));
     assert!(help.contains("Update configured dependencies and resync managed outputs"));
-    assert!(help.contains("Update the installed nodus CLI when the install method is supported"));
+    assert!(
+        help.contains(
+            "Check for or install a newer nodus CLI when the install method is supported"
+        )
+    );
     assert!(help.contains("Generate shell completion scripts"));
     assert!(
         help.contains("Use an AI review agent to assess whether a package graph looks safe to use")

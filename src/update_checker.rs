@@ -70,7 +70,7 @@ enum UnsupportedInstall {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum PlannedSelfUpdate {
+enum PlannedUpgrade {
     AlreadyCurrent {
         version: Version,
     },
@@ -125,7 +125,7 @@ pub fn maybe_notify(store_root: &Path, reporter: &Reporter) {
     let _ = maybe_notify_with(store_root, reporter, &options, fetch_latest_release);
 }
 
-pub fn self_update(reporter: &Reporter) -> Result<()> {
+pub fn upgrade(reporter: &Reporter, check_only: bool) -> Result<()> {
     let options = CheckOptions::for_current_binary()?;
     reporter.status("Checking", "latest Nodus release")?;
     let latest = fetch_latest_release()?.ok_or_else(|| {
@@ -135,12 +135,18 @@ pub fn self_update(reporter: &Reporter) -> Result<()> {
         )
     })?;
 
-    match plan_self_update(&options, &latest) {
-        PlannedSelfUpdate::AlreadyCurrent { version } => {
+    let plan = plan_upgrade(&options, &latest);
+    if check_only {
+        reporter.finish(upgrade_available_message(&options, &latest, &plan))?;
+        return Ok(());
+    }
+
+    match plan {
+        PlannedUpgrade::AlreadyCurrent { version } => {
             reporter.finish(format!("nodus {version} is already current"))?;
             Ok(())
         }
-        PlannedSelfUpdate::CargoRegistry {
+        PlannedUpgrade::CargoRegistry {
             current_version,
             latest,
             binary_path,
@@ -168,7 +174,7 @@ pub fn self_update(reporter: &Reporter) -> Result<()> {
             ))?;
             Ok(())
         }
-        PlannedSelfUpdate::GithubRelease {
+        PlannedUpgrade::GithubRelease {
             current_version,
             latest,
             binary_path,
@@ -207,7 +213,7 @@ pub fn self_update(reporter: &Reporter) -> Result<()> {
             ))?;
             Ok(())
         }
-        PlannedSelfUpdate::Unsupported { message, .. } => anyhow::bail!(message),
+        PlannedUpgrade::Unsupported { message, .. } => anyhow::bail!(message),
     }
 }
 
@@ -280,27 +286,28 @@ where
         return Ok(());
     }
 
-    let notice = update_notice_message(options, &latest_release);
+    let plan = plan_upgrade(options, &latest_release);
+    let notice = upgrade_available_message(options, &latest_release, &plan);
     reporter.warning(notice)?;
     state.last_notified_tag = Some(latest_release.tag);
     persist_state(&state_path, &state)
 }
 
-fn plan_self_update(options: &CheckOptions, latest: &LatestRelease) -> PlannedSelfUpdate {
+fn plan_upgrade(options: &CheckOptions, latest: &LatestRelease) -> PlannedUpgrade {
     if latest.version <= options.current_version {
-        return PlannedSelfUpdate::AlreadyCurrent {
+        return PlannedUpgrade::AlreadyCurrent {
             version: options.current_version.clone(),
         };
     }
 
     match detect_install_target(options) {
-        InstallTarget::CargoRegistry { binary_path } => PlannedSelfUpdate::CargoRegistry {
+        InstallTarget::CargoRegistry { binary_path } => PlannedUpgrade::CargoRegistry {
             current_version: options.current_version.clone(),
             latest: latest.clone(),
             binary_path,
             command: cargo_update_command(&latest.version),
         },
-        InstallTarget::GithubRelease { binary_path } => PlannedSelfUpdate::GithubRelease {
+        InstallTarget::GithubRelease { binary_path } => PlannedUpgrade::GithubRelease {
             current_version: options.current_version.clone(),
             latest: latest.clone(),
             install_dir: binary_path
@@ -310,9 +317,9 @@ fn plan_self_update(options: &CheckOptions, latest: &LatestRelease) -> PlannedSe
             binary_path,
             script_url: tagged_install_script_url(&latest.tag),
         },
-        InstallTarget::Unsupported(install) => PlannedSelfUpdate::Unsupported {
+        InstallTarget::Unsupported(install) => PlannedUpgrade::Unsupported {
             latest: latest.clone(),
-            message: unsupported_update_message(latest, &install),
+            message: unsupported_upgrade_message(latest, &install),
         },
     }
 }
@@ -385,13 +392,20 @@ fn detect_release_install(current_exe: &Path) -> InstallTarget {
     }
 }
 
-fn update_notice_message(options: &CheckOptions, latest: &LatestRelease) -> String {
-    match detect_install_target(options) {
-        InstallTarget::CargoRegistry { .. } | InstallTarget::GithubRelease { .. } => format!(
-            "nodus {} is available (current {}); run `nodus self-update`",
+fn upgrade_available_message(
+    options: &CheckOptions,
+    latest: &LatestRelease,
+    plan: &PlannedUpgrade,
+) -> String {
+    match plan {
+        PlannedUpgrade::AlreadyCurrent { .. } => {
+            format!("nodus {} is already current", options.current_version)
+        }
+        PlannedUpgrade::CargoRegistry { .. } | PlannedUpgrade::GithubRelease { .. } => format!(
+            "nodus {} is available (current {}); run `nodus upgrade`",
             latest.version, options.current_version
         ),
-        InstallTarget::Unsupported(_) => format!(
+        PlannedUpgrade::Unsupported { .. } => format!(
             "nodus {} is available (current {}); see {}",
             latest.version,
             options.current_version,
@@ -569,27 +583,27 @@ fn release_permission_guidance(tag: &str, install_dir: &Path) -> String {
     )
 }
 
-fn unsupported_update_message(latest: &LatestRelease, install: &UnsupportedInstall) -> String {
+fn unsupported_upgrade_message(latest: &LatestRelease, install: &UnsupportedInstall) -> String {
     match install {
         UnsupportedInstall::CargoPath {
             binary_path,
             source,
         } => format!(
-            "automatic self-update only supports crates.io cargo installs.\nThe current binary {} was installed from `{source}`.\nReinstall it from that original Cargo path source.",
+            "automatic upgrades only support crates.io cargo installs.\nThe current binary {} was installed from `{source}`.\nReinstall it from that original Cargo path source.",
             display_path(binary_path),
         ),
         UnsupportedInstall::CargoGit {
             binary_path,
             source,
         } => format!(
-            "automatic self-update only supports crates.io cargo installs.\nThe current binary {} was installed from `{source}`.\nReinstall it from that original Cargo git source.",
+            "automatic upgrades only support crates.io cargo installs.\nThe current binary {} was installed from `{source}`.\nReinstall it from that original Cargo git source.",
             display_path(binary_path),
         ),
         UnsupportedInstall::CargoOther {
             binary_path,
             source,
         } => format!(
-            "automatic self-update does not support the current Cargo install source for {}.\nDetected source: `{source}`.\nUpdate it manually using that original installation method.",
+            "automatic upgrades do not support the current Cargo install source for {}.\nDetected source: `{source}`.\nUpdate it manually using that original installation method.",
             display_path(binary_path),
         ),
         UnsupportedInstall::Ambiguous { binary_path } => {
@@ -837,7 +851,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_cargo_path_installs_for_self_update() {
+    fn rejects_cargo_path_installs_for_upgrade() {
         let temp = tempfile::TempDir::new().unwrap();
         let cargo_home = temp.path().join(".cargo");
         fs::create_dir_all(cargo_home.join("bin")).unwrap();
@@ -880,8 +894,8 @@ mod tests {
             version: Version::parse("0.3.4").unwrap(),
         };
 
-        match plan_self_update(&test_options(binary_path), &latest) {
-            PlannedSelfUpdate::Unsupported { message, .. } => {
+        match plan_upgrade(&test_options(binary_path), &latest) {
+            PlannedUpgrade::Unsupported { message, .. } => {
                 assert!(message.contains("could not determine"));
                 assert!(message.contains("cargo install --locked --force nodus --version 0.3.4"));
                 assert!(message.contains("install.sh"));
@@ -909,8 +923,8 @@ mod tests {
         options.cargo_home = Some(cargo_home);
 
         assert_eq!(
-            plan_self_update(&options, &latest),
-            PlannedSelfUpdate::CargoRegistry {
+            plan_upgrade(&options, &latest),
+            PlannedUpgrade::CargoRegistry {
                 current_version: Version::parse("0.3.3").unwrap(),
                 latest,
                 binary_path,
@@ -938,8 +952,8 @@ mod tests {
         };
 
         assert_eq!(
-            plan_self_update(&test_options(binary_path.clone()), &latest),
-            PlannedSelfUpdate::GithubRelease {
+            plan_upgrade(&test_options(binary_path.clone()), &latest),
+            PlannedUpgrade::GithubRelease {
                 current_version: Version::parse("0.3.3").unwrap(),
                 latest,
                 binary_path: binary_path.clone(),
@@ -950,7 +964,7 @@ mod tests {
     }
 
     #[test]
-    fn notices_suggest_self_update_for_supported_installs() {
+    fn notices_suggest_upgrade_for_supported_installs() {
         let temp = tempfile::TempDir::new().unwrap();
         let cargo_home = temp.path().join(".cargo");
         fs::create_dir_all(cargo_home.join("bin")).unwrap();
@@ -966,10 +980,11 @@ mod tests {
             tag: "v0.3.4".into(),
             version: Version::parse("0.3.4").unwrap(),
         };
+        let plan = plan_upgrade(&options, &latest);
 
         assert_eq!(
-            update_notice_message(&options, &latest),
-            "nodus 0.3.4 is available (current 0.3.3); run `nodus self-update`"
+            upgrade_available_message(&options, &latest, &plan),
+            "nodus 0.3.4 is available (current 0.3.3); run `nodus upgrade`"
         );
     }
 
@@ -981,13 +996,30 @@ mod tests {
             tag: "v0.3.4".into(),
             version: Version::parse("0.3.4").unwrap(),
         };
+        let options = test_options(binary_path);
+        let plan = plan_upgrade(&options, &latest);
 
         assert_eq!(
-            update_notice_message(&test_options(binary_path), &latest),
+            upgrade_available_message(&options, &latest, &plan),
             format!(
                 "nodus 0.3.4 is available (current 0.3.3); see {}",
                 install_url()
             )
+        );
+    }
+
+    #[test]
+    fn upgrade_check_reports_when_current_version_is_already_latest() {
+        let options = test_options(PathBuf::from("/tmp/nodus"));
+        let latest = LatestRelease {
+            tag: "v0.3.3".into(),
+            version: Version::parse("0.3.3").unwrap(),
+        };
+        let plan = plan_upgrade(&options, &latest);
+
+        assert_eq!(
+            upgrade_available_message(&options, &latest, &plan),
+            "nodus 0.3.3 is already current"
         );
     }
 
