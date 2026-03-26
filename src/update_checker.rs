@@ -1643,7 +1643,7 @@ HTTP/2 200 \r\n\
         assert!(!marker_path.exists());
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn powershell_install_script_handles_windows_release_assets_from_flat_zip_root() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -1661,7 +1661,7 @@ HTTP/2 200 \r\n\
             "Compress-Archive -Path 'nodus.exe','README.md','LICENSE' -DestinationPath '{}' -Force",
             asset_path.to_string_lossy().replace('\'', "''")
         );
-        let zip_status = ProcessCommand::new("powershell")
+        let zip_status = ProcessCommand::new("pwsh")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -1685,7 +1685,7 @@ HTTP/2 200 \r\n\
         let test_script_path = temp.path().join("install-test.ps1");
         fs::write(&test_script_path, patched_script).unwrap();
 
-        let install_output = ProcessCommand::new("powershell")
+        let install_output = ProcessCommand::new("pwsh")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",
@@ -1717,7 +1717,7 @@ HTTP/2 200 \r\n\
         );
         assert!(install_dir.join("nodus.exe").exists());
 
-        let uninstall_output = ProcessCommand::new("powershell")
+        let uninstall_output = ProcessCommand::new("pwsh")
             .args([
                 "-NoProfile",
                 "-ExecutionPolicy",

@@ -32,3 +32,54 @@ jobs:
 
       - name: Run Rust preflight
         run: bash scripts/rust_ci_preflight.sh
+
+  installer-smoke:
+    name: Installer smoke (ubuntu)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify PowerShell availability
+        run: pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+
+      - name: Run installer integration tests on Linux host
+        run: |
+          set -euo pipefail
+          cargo test install_script_writes_and_removes_the_release_install_marker
+          cargo test install_script_handles_windows_release_assets_from_msys_shells
+          cargo test powershell_install_script_handles_windows_release_assets_from_flat_zip_root
+
+  homebrew-smoke:
+    name: Homebrew smoke (ubuntu)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install Homebrew
+        run: |
+          set -euo pipefail
+          NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+      - name: Add Homebrew to PATH
+        run: |
+          set -euo pipefail
+          echo "/home/linuxbrew/.linuxbrew/bin" >> "$GITHUB_PATH"
+          echo "/home/linuxbrew/.linuxbrew/sbin" >> "$GITHUB_PATH"
+
+      - name: Verify Homebrew install command
+        run: |
+          set -euo pipefail
+          brew --version
+          brew tap WendellXY/nodus
+          brew install WendellXY/nodus/nodus
+          nodus --version
