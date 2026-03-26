@@ -3114,6 +3114,7 @@ shared = { path = "vendor/shared" }
             .unwrap();
         let managed_skill_id = namespaced_skill_id(dependency, "checks");
         let managed_agent_file = namespaced_file_name(dependency, "shared", "md");
+        let managed_copilot_agent_file = namespaced_file_name(dependency, "shared", "agent.md");
         let managed_command_file = namespaced_file_name(dependency, "build", "md");
         let managed_claude_rule_file = namespaced_file_name(dependency, "default", "md");
         let managed_cursor_rule_file = namespaced_file_name(dependency, "default", "mdc");
@@ -3141,6 +3142,16 @@ shared = { path = "vendor/shared" }
         assert!(
             temp.path()
                 .join(format!(".codex/skills/{managed_skill_id}/SKILL.md"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".github/skills/{managed_skill_id}/SKILL.md"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".github/agents/{managed_copilot_agent_file}"))
                 .exists()
         );
         assert!(
@@ -3188,6 +3199,14 @@ shared = { path = "vendor/shared" }
         assert!(
             fs::read_to_string(
                 temp.path()
+                    .join(format!(".github/skills/{managed_skill_id}/SKILL.md"))
+            )
+            .unwrap()
+            .contains(&format!("name: {managed_skill_id}"))
+        );
+        assert!(
+            fs::read_to_string(
+                temp.path()
                     .join(format!(".opencode/skills/{managed_skill_id}/SKILL.md"))
             )
             .unwrap()
@@ -3197,6 +3216,90 @@ shared = { path = "vendor/shared" }
             fs::read_to_string(temp.path().join("AGENTS.md")).unwrap(),
             "user-owned instructions\n"
         );
+    }
+
+    #[test]
+    fn sync_filters_github_copilot_outputs_by_selected_components() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_manifest(
+            temp.path(),
+            r#"
+[adapters]
+enabled = ["copilot"]
+
+[dependencies]
+shared = { path = "vendor/shared", components = ["skills"] }
+"#,
+        );
+        write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+        write_file(
+            &temp.path().join("vendor/shared/agents/shared.md"),
+            "# Shared\n",
+        );
+
+        sync_all(temp.path(), cache.path());
+
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+        let dependency = resolution
+            .packages
+            .iter()
+            .find(|package| package.alias == "shared")
+            .unwrap();
+        let managed_skill_id = namespaced_skill_id(dependency, "review");
+        let managed_agent_file = namespaced_file_name(dependency, "shared", "agent.md");
+
+        assert!(
+            temp.path()
+                .join(format!(".github/skills/{managed_skill_id}/SKILL.md"))
+                .exists()
+        );
+        assert!(
+            !temp
+                .path()
+                .join(format!(".github/agents/{managed_agent_file}"))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn sync_rewrites_github_copilot_skill_name_to_managed_id() {
+        let temp = TempDir::new().unwrap();
+        let cache = cache_dir();
+        write_manifest(
+            temp.path(),
+            r#"
+[adapters]
+enabled = ["copilot"]
+
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+        );
+        write_file(
+            &temp.path().join("vendor/shared/skills/review/SKILL.md"),
+            "---\nname: shared-review\ndescription: Example review skill.\n---\n# Review\n",
+        );
+
+        sync_all(temp.path(), cache.path());
+
+        let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+        let dependency = resolution
+            .packages
+            .iter()
+            .find(|package| package.alias == "shared")
+            .unwrap();
+        let managed_skill_id = namespaced_skill_id(dependency, "review");
+
+        assert!(
+            fs::read_to_string(
+                temp.path()
+                    .join(format!(".github/skills/{managed_skill_id}/SKILL.md"))
+            )
+            .unwrap()
+            .contains(&format!("name: {managed_skill_id}"))
+        );
+        assert!(!temp.path().join(".github/.gitignore").exists());
     }
 
     #[test]
@@ -4375,6 +4478,11 @@ shared = { path = "vendor/shared" }
         assert!(
             lockfile
                 .managed_files
+                .contains(&".github/skills/iframe-ad".into())
+        );
+        assert!(
+            lockfile
+                .managed_files
                 .contains(&".opencode/skills/iframe-ad".into())
         );
         assert!(
@@ -5243,6 +5351,16 @@ other = { path = "vendor/other" }
         assert_ne!(shared_skill_id, other_skill_id);
         assert!(
             temp.path()
+                .join(format!(".github/skills/{shared_skill_id}/SKILL.md"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".github/skills/{other_skill_id}/SKILL.md"))
+                .exists()
+        );
+        assert!(
+            temp.path()
                 .join(format!(".opencode/skills/{shared_skill_id}/SKILL.md"))
                 .exists()
         );
@@ -5306,12 +5424,15 @@ other = { path = "vendor/other" }
 
         let shared_agent_file = namespaced_file_name(shared, "security", "md");
         let other_agent_file = namespaced_file_name(other, "security", "md");
+        let shared_copilot_agent_file = namespaced_file_name(shared, "security", "agent.md");
+        let other_copilot_agent_file = namespaced_file_name(other, "security", "agent.md");
         let shared_command_file = namespaced_file_name(shared, "build", "md");
         let other_command_file = namespaced_file_name(other, "build", "md");
         let shared_claude_rule_file = namespaced_file_name(shared, "default", "md");
         let other_claude_rule_file = namespaced_file_name(other, "default", "md");
 
         assert_ne!(shared_agent_file, other_agent_file);
+        assert_ne!(shared_copilot_agent_file, other_copilot_agent_file);
         assert_ne!(shared_command_file, other_command_file);
         assert_ne!(shared_claude_rule_file, other_claude_rule_file);
 
@@ -5343,6 +5464,16 @@ other = { path = "vendor/other" }
         assert!(
             temp.path()
                 .join(format!(".claude/rules/{other_claude_rule_file}"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".github/agents/{shared_copilot_agent_file}"))
+                .exists()
+        );
+        assert!(
+            temp.path()
+                .join(format!(".github/agents/{other_copilot_agent_file}"))
                 .exists()
         );
         assert!(

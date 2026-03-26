@@ -207,6 +207,7 @@ impl Lockfile {
         if *runtime != ".agents"
             && *runtime != ".claude"
             && *runtime != ".codex"
+            && *runtime != ".github"
             && *runtime != ".cursor"
             && *runtime != ".opencode"
         {
@@ -232,7 +233,8 @@ impl Lockfile {
                 })
                 .collect::<Vec<_>>(),
             "agents" | "rules" | "commands" => {
-                let (artifact_id, extension) = artifact_name.rsplit_once('.')?;
+                let (artifact_id, extension) =
+                    split_managed_file_name(runtime.as_str(), artifact_dir, artifact_name)?;
                 self.packages
                     .iter()
                     .filter(|package| match artifact_dir.as_str() {
@@ -274,6 +276,19 @@ impl Lockfile {
             })
             .collect()
     }
+}
+
+fn split_managed_file_name<'a>(
+    runtime: &str,
+    artifact_dir: &str,
+    artifact_name: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    if runtime == ".github" && artifact_dir == "agents" {
+        let artifact_id = artifact_name.strip_suffix(".agent.md")?;
+        return Some((artifact_id, "agent.md"));
+    }
+
+    artifact_name.rsplit_once('.')
 }
 
 pub fn managed_mcp_server_name(package_alias: &str, server_id: &str) -> String {
@@ -472,6 +487,7 @@ managed_files = []
                 ".agents/skills/iframe-ad".into(),
                 ".claude/skills/iframe-ad".into(),
                 ".codex/skills/iframe-ad".into(),
+                ".github/skills/iframe-ad".into(),
                 ".cursor/skills/iframe-ad".into(),
                 ".opencode/skills/iframe-ad".into(),
             ],
@@ -487,6 +503,9 @@ managed_files = []
         )));
         assert!(managed_paths.contains(&PathBuf::from(
             "/tmp/project/.codex/skills/iframe-ad_01f556"
+        )));
+        assert!(managed_paths.contains(&PathBuf::from(
+            "/tmp/project/.github/skills/iframe-ad_01f556"
         )));
         assert!(managed_paths.contains(&PathBuf::from(
             "/tmp/project/.cursor/skills/iframe-ad_01f556"
@@ -526,6 +545,7 @@ managed_files = []
                 ".claude/agents/security.md".into(),
                 ".claude/commands/build.md".into(),
                 ".claude/rules/default.md".into(),
+                ".github/agents/security.agent.md".into(),
                 ".cursor/commands/build.md".into(),
                 ".cursor/rules/default.mdc".into(),
                 ".opencode/agents/security.md".into(),
@@ -547,6 +567,9 @@ managed_files = []
         )));
         assert!(managed_paths.contains(&PathBuf::from(
             "/tmp/project/.claude/rules/default_01f556.md"
+        )));
+        assert!(managed_paths.contains(&PathBuf::from(
+            "/tmp/project/.github/agents/security_01f556.agent.md"
         )));
         assert!(managed_paths.contains(&PathBuf::from(
             "/tmp/project/.cursor/commands/build_01f556.md"
