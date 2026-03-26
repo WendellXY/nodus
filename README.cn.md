@@ -65,6 +65,8 @@ cargo install nodus
 curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/main/install.sh | bash
 ```
 
+预构建 release 归档当前覆盖 macOS（`x86_64`、`arm64`）、Linux（`x86_64`、`arm64`/`aarch64`）和 Windows（`x86_64`）。
+
 安装指定版本，或选择自定义安装目录：
 
 ```bash

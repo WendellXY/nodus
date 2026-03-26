@@ -66,6 +66,8 @@ Install the latest prebuilt binary on macOS or Linux:
 curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/main/install.sh | bash
 ```
 
+Prebuilt release archives are published for macOS (`x86_64`, `arm64`), Linux (`x86_64`, `arm64`/`aarch64`), and Windows (`x86_64`).
+
 Install a specific release or choose a custom install directory:
 
 ```bash
