@@ -624,10 +624,6 @@ fn release_installer_script_name_for_platform(platform: HostPlatform) -> &'stati
     }
 }
 
-fn tagged_install_script_url(tag: &str) -> String {
-    tagged_install_script_url_for_platform(tag, current_host_platform())
-}
-
 fn tagged_install_script_url_for_platform(tag: &str, platform: HostPlatform) -> String {
     format!(
         "https://raw.githubusercontent.com/{REPO_SLUG}/{tag}/{}",
@@ -1087,7 +1083,7 @@ mod tests {
                 latest,
                 binary_path: binary_path.clone(),
                 install_dir: binary_path.parent().unwrap().to_path_buf(),
-                script_url: tagged_install_script_url("v0.4.1"),
+                script_url: tagged_install_script_url_for_platform("v0.4.1", HostPlatform::Unix),
             }
         );
     }
