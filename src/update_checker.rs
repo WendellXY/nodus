@@ -722,6 +722,7 @@ fn persist_state(path: &Path, state: &UpdateCheckState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
+    use std::process::Command as ProcessCommand;
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -780,6 +781,10 @@ mod tests {
     fn read_state(path: &Path) -> UpdateCheckState {
         let contents = fs::read_to_string(path).unwrap();
         serde_json::from_str(&contents).unwrap()
+    }
+
+    fn script_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh")
     }
 
     #[test]
@@ -1222,5 +1227,90 @@ HTTP/2 200 \r\n\
             tagged_install_script_url("v0.3.4"),
             format!("https://raw.githubusercontent.com/{REPO_SLUG}/v0.3.4/install.sh")
         );
+    }
+
+    #[test]
+    fn install_script_writes_and_removes_the_release_install_marker() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let fake_bin = temp.path().join("fake-bin");
+        let install_dir = temp.path().join("install");
+        let asset_root = temp
+            .path()
+            .join("asset")
+            .join("nodus-v0.3.4-x86_64-unknown-linux-gnu");
+        let asset_path = temp
+            .path()
+            .join("nodus-v0.3.4-x86_64-unknown-linux-gnu.tar.gz");
+        fs::create_dir_all(&fake_bin).unwrap();
+        fs::create_dir_all(&asset_root).unwrap();
+        fs::write(asset_root.join(BIN_NAME), "#!/usr/bin/env bash\nexit 0\n").unwrap();
+        let tar_status = ProcessCommand::new("tar")
+            .args(["-czf", asset_path.to_str().unwrap(), "-C"])
+            .arg(temp.path().join("asset"))
+            .arg(asset_root.file_name().unwrap())
+            .status()
+            .unwrap();
+        assert!(tar_status.success());
+
+        fs::write(
+            fake_bin.join("uname"),
+            "#!/usr/bin/env bash\ncase \"$1\" in\n  -s) printf 'Linux\\n' ;;\n  -m) printf 'x86_64\\n' ;;\n  *) printf 'unexpected uname args: %s\\n' \"$*\" >&2; exit 1 ;;\nesac\n",
+        )
+        .unwrap();
+        fs::write(
+            fake_bin.join("curl"),
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\noutput=''\nprev=''\nurl=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '-o' ]; then\n    output=\"$arg\"\n    prev=''\n    continue\n  fi\n  case \"$arg\" in\n    -o) prev='-o' ;;\n    http://*|https://*) url=\"$arg\" ;;\n  esac\ndone\ncase \"$url\" in\n  *nodus-v0.3.4-x86_64-unknown-linux-gnu.tar.gz)\n    cp {} \"$output\"\n    ;;\n  *)\n    printf 'unexpected curl url: %s\\n' \"$url\" >&2\n    exit 1\n    ;;\nesac\n",
+                shell_quote(&asset_path.to_string_lossy())
+            ),
+        )
+        .unwrap();
+        for helper in ["uname", "curl"] {
+            let status = ProcessCommand::new("chmod")
+                .args(["+x", fake_bin.join(helper).to_str().unwrap()])
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+
+        let path = format!("{}:{}", fake_bin.display(), env::var("PATH").unwrap());
+        let install_output = ProcessCommand::new("bash")
+            .arg(script_path())
+            .args(["--version", "v0.3.4", "--install-dir"])
+            .arg(&install_dir)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(
+            install_output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&install_output.stderr)
+        );
+
+        let marker_path = install_dir.join(INSTALL_MARKER_FILE);
+        let marker: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&marker_path).unwrap()).unwrap();
+        assert_eq!(marker["install_method"], "github_release");
+        assert_eq!(marker["repo_slug"], REPO_SLUG);
+        assert_eq!(marker["binary_name"], BIN_NAME);
+        assert_eq!(
+            marker["binary_path"],
+            serde_json::Value::String(install_dir.join(BIN_NAME).display().to_string())
+        );
+
+        let uninstall_output = ProcessCommand::new("bash")
+            .arg(script_path())
+            .args(["--uninstall", "--install-dir"])
+            .arg(&install_dir)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(
+            uninstall_output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&uninstall_output.stderr)
+        );
+        assert!(!install_dir.join(BIN_NAME).exists());
+        assert!(!marker_path.exists());
     }
 }
