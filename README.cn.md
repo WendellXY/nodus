@@ -48,7 +48,7 @@ nodus completion zsh > ~/.zsh/completions/_nodus
 - 非受管理文件永远不会被覆盖
 - 高敏感度包必须显式选择允许
 
-包作者仍然可以从 `skills/`、`agents/`、`rules/` 和 `commands/` 发布内容，但作为使用方，你主要会和 `nodus add`、`nodus info`、`nodus update`、`nodus relay`、`nodus sync`、`nodus doctor` 打交道。
+包作者仍然可以从 `skills/`、`agents/`、`rules/` 和 `commands/` 发布内容，但作为使用方，你主要会和 `nodus add`、`nodus info`、`nodus update`、`nodus self-update`、`nodus relay`、`nodus sync`、`nodus doctor` 打交道。
 
 <a id="install"></a>
 ## 安装
@@ -101,7 +101,20 @@ cargo install --path .
 nodus <command>
 ```
 
-交互式命令最多每天检查一次 GitHub releases；如果发现更新的 Nodus 版本，会在 stderr 输出一条警告。设置 `NODUS_NO_UPDATE_CHECK=1` 可关闭该提示。
+如果当前安装方式受支持，可以直接用下面的命令原地更新 CLI：
+
+```bash
+nodus self-update
+```
+
+当前支持的自更新安装方式：
+
+- 来自 crates.io 的 `cargo install nodus`
+- 通过 `install.sh` 安装的 GitHub release 二进制
+
+`cargo install --path .`、Cargo git 安装以及来源不明确的手动二进制拷贝，默认不支持自动自更新。
+
+交互式命令最多每天检查一次 GitHub releases；如果发现更新的 Nodus 版本，会在 stderr 输出一条警告。当前安装方式支持自更新时，提示会直接引导你运行 `nodus self-update`；否则会回退到手动更新说明。设置 `NODUS_NO_UPDATE_CHECK=1` 可关闭该提示。
 
 默认情况下，Nodus 会将共享镜像、检出和快照存储在平台本地应用数据目录中：
 
@@ -472,6 +485,18 @@ nodus info WendellXY/nodus --branch main
 ### `nodus remove`
 
 从 `nodus.toml` 中移除一个依赖，然后运行常规同步流程来更新 `nodus.lock` 并清理受管理运行时文件。包参数既可以是依赖别名，也可以是 `owner/repo` 这样的仓库引用。
+
+### `nodus self-update`
+
+在安装方式可识别时，更新当前安装的 Nodus CLI。
+
+行为：
+
+- 更新前会先检查最新 GitHub release
+- 支持通过 `cargo install nodus` 安装的 crates.io 版本
+- 支持通过 `install.sh` 安装的 GitHub release 二进制
+- 对于不支持或来源不明确的安装，不会猜测更新方式，而是输出明确的手动更新指引
+- 当当前安装目录不可写时，会直接给出处理建议，而不会尝试提权
 
 ### `nodus relay`
 

@@ -50,7 +50,7 @@ The install flow is designed to stay predictable:
 - unmanaged files are never overwritten
 - high-sensitivity packages require explicit opt-in
 
-Package authors can still publish content from `skills/`, `agents/`, `rules/`, and `commands/`, but as a consumer you mostly interact with `nodus add`, `nodus info`, `nodus outdated`, `nodus update`, `nodus relay`, `nodus sync`, and `nodus doctor`.
+Package authors can still publish content from `skills/`, `agents/`, `rules/`, and `commands/`, but as a consumer you mostly interact with `nodus add`, `nodus info`, `nodus outdated`, `nodus update`, `nodus self-update`, `nodus relay`, `nodus sync`, and `nodus doctor`.
 
 ## Install
 
@@ -102,7 +102,20 @@ After installation, run:
 nodus <command>
 ```
 
-Interactive commands check GitHub releases at most once per day and print a warning on stderr when a newer Nodus version is available. Set `NODUS_NO_UPDATE_CHECK=1` to disable that notice.
+When the current install method is supported, update the CLI in place with:
+
+```bash
+nodus self-update
+```
+
+Supported self-update methods:
+
+- `cargo install nodus` from crates.io
+- GitHub release installs performed by `install.sh`
+
+Automatic self-update is intentionally not available for `cargo install --path .`, Cargo git installs, or ambiguous/manual binary copies.
+
+Interactive commands check GitHub releases at most once per day and print a warning on stderr when a newer Nodus version is available. When the current install method supports it, the notice points to `nodus self-update`; otherwise it falls back to manual install guidance. Set `NODUS_NO_UPDATE_CHECK=1` to disable that notice.
 
 By default, Nodus stores shared mirrors, checkouts, and snapshots in the platform's local application data directory:
 
@@ -526,6 +539,18 @@ Behavior:
 - branch Git dependencies keep their branch pin and refresh to the latest branch head
 - path dependencies are left as local paths and included in the normal sync pass
 - `--allow-high-sensitivity` mirrors `nodus sync` for projects that already opt into high-sensitivity capabilities
+
+### `nodus self-update`
+
+Updates the installed Nodus CLI when the install method is recognized.
+
+Behavior:
+
+- checks the latest GitHub release before updating
+- supports crates.io registry installs made with `cargo install nodus`
+- supports GitHub release installs made with `install.sh`
+- refuses to guess for unsupported or ambiguous installs and prints exact manual guidance instead
+- fails with guidance instead of attempting privilege escalation when the current install directory is not writable
 
 ### `nodus relay`
 
