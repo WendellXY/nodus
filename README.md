@@ -56,17 +56,30 @@ Install the latest prebuilt binary on macOS or Linux:
 curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/main/install.sh | bash
 ```
 
+Install with Homebrew:
+
+```bash
+brew install WendellXY/nodus/nodus
+```
+
 Install the latest prebuilt binary on Windows with PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex
 ```
 
-Install with Homebrew:
+<details>
+<summary>Windows install command failed?</summary>
 
-```bash
-brew install WendellXY/nodus/nodus
+If the command fails (for example, `pwsh` is not recognized), install PowerShell 7, restart your terminal, then run with `pwsh`:
+
+```powershell
+winget install --id Microsoft.PowerShell --source winget
+# Restart terminal first so `pwsh` is available on PATH.
+pwsh -NoProfile -Command "irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex"
 ```
+
+</details>
 
 ## Quick Start
 
@@ -229,6 +242,13 @@ Install a specific release on Windows:
 
 ```powershell
 $env:NODUS_VERSION='v0.1.0'; irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex
+```
+
+If this command fails on Windows, install PowerShell 7, restart your terminal, then run through `pwsh`:
+
+```powershell
+$env:NODUS_VERSION='v0.1.0'
+pwsh -NoProfile -Command "irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex"
 ```
 
 ## When To Use `sync` vs `update`

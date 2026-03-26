@@ -56,8 +56,36 @@ function Normalize-Version([string]$Value) {
     return "v$Value"
 }
 
+function Show-PowerShell-Hint {
+    $psVersion = $PSVersionTable.PSVersion
+    $isLegacyDesktop = ($PSVersionTable.PSEdition -eq "Desktop") -or ($psVersion.Major -lt 7)
+    if ($isLegacyDesktop) {
+        Log "Hint: You are running Windows PowerShell $psVersion."
+        Log "Hint: For best compatibility, install PowerShell 7+ and run:"
+        Log ("  pwsh -NoProfile -Command ""irm https://raw.githubusercontent.com/{0}/main/install.ps1 | iex""" -f $RepoSlug)
+    }
+}
+
+function Resolve-Architecture {
+    $runtimeInfoType = [System.Runtime.InteropServices.RuntimeInformation]
+    $bindingFlags = [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static
+    $archProperty = $runtimeInfoType.GetProperty("OSArchitecture", $bindingFlags)
+    if ($null -ne $archProperty) {
+        $archValue = $archProperty.GetValue($null)
+        if ($null -ne $archValue) {
+            return $archValue.ToString().ToUpperInvariant()
+        }
+    }
+
+    if ([Environment]::Is64BitOperatingSystem) {
+        return "X64"
+    }
+
+    return "X86"
+}
+
 function Resolve-Target {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    $arch = Resolve-Architecture
     switch ($arch) {
         "X64" { return "x86_64-pc-windows-msvc" }
         default { Fail "unsupported Windows architecture: $arch" }
@@ -185,6 +213,7 @@ try {
         exit 0
     }
 
+    Show-PowerShell-Hint
     $Version = Normalize-Version $Version
     $InstallDir = Resolve-InstallDir $InstallDir
     if ($Uninstall) {

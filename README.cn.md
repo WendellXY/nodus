@@ -63,6 +63,25 @@ curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/main/install.sh | b
 brew install WendellXY/nodus/nodus
 ```
 
+在 Windows 上通过 PowerShell 安装最新预构建二进制：
+
+```powershell
+irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex
+```
+
+<details>
+<summary>Windows 安装命令执行失败？</summary>
+
+如果命令执行失败（例如提示 `pwsh` 未被识别），先安装 PowerShell 7，重启终端，再用 `pwsh` 执行：
+
+```powershell
+winget install --id Microsoft.PowerShell --source winget
+# 先重启终端，让 `pwsh` 在 PATH 中生效。
+pwsh -NoProfile -Command "irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex"
+```
+
+</details>
+
 <a id="quick-start"></a>
 ## 快速开始
 
@@ -221,6 +240,19 @@ Windows: %LOCALAPPDATA%\nodus\
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WendellXY/nodus/main/install.sh | bash -s -- --version v0.1.0
+```
+
+在 Windows 上安装指定版本：
+
+```powershell
+$env:NODUS_VERSION='v0.1.0'; irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex
+```
+
+如果这个命令在 Windows 上执行失败，请先安装 PowerShell 7 并重启终端，然后通过 `pwsh` 执行：
+
+```powershell
+$env:NODUS_VERSION='v0.1.0'
+pwsh -NoProfile -Command "irm https://raw.githubusercontent.com/WendellXY/nodus/main/install.ps1 | iex"
 ```
 
 ## 什么时候用 `sync`，什么时候用 `update`
