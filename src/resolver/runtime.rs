@@ -9,6 +9,13 @@ use rayon::prelude::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use self::support::{
+    build_sync_execution_plan, enforce_capabilities, execute_sync_plan, find_managed_collision,
+    find_unmanaged_collision, load_owned_paths, recover_runtime_owned_paths,
+    unmanaged_collision_guidance,
+};
+#[cfg(test)]
+use self::support::{prune_empty_parent_dirs, write_managed_files};
 use crate::adapters::{Adapter, Adapters, ManagedFile, build_output_plan};
 use crate::execution::ExecutionMode;
 use crate::git::{
@@ -24,13 +31,6 @@ use crate::paths::display_path;
 use crate::report::Reporter;
 use crate::selection::{resolve_adapter_selection, should_prompt_for_adapter};
 use crate::store::{SnapshotSource, snapshot_packages};
-use self::support::{
-    build_sync_execution_plan, enforce_capabilities, execute_sync_plan, find_managed_collision,
-    find_unmanaged_collision, load_owned_paths, recover_runtime_owned_paths,
-    unmanaged_collision_guidance,
-};
-#[cfg(test)]
-use self::support::{prune_empty_parent_dirs, write_managed_files};
 
 #[derive(Debug, Clone)]
 pub struct Resolution {
