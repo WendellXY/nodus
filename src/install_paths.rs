@@ -1,9 +1,9 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
 #[cfg(not(target_os = "windows"))]
 use anyhow::Context;
+use anyhow::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallScope {
