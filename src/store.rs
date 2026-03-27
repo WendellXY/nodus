@@ -6,8 +6,6 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use tempfile::{Builder, NamedTempFile};
 
-use crate::resolver::Resolution;
-
 pub const STORE_ROOT: &str = "store/sha256";
 
 #[derive(Debug, Clone)]
@@ -16,21 +14,27 @@ pub struct StoredPackage {
     pub snapshot_root: PathBuf,
 }
 
-pub fn snapshot_resolution(
+pub trait SnapshotSource: Sync {
+    fn digest(&self) -> &str;
+    fn package_root(&self) -> &Path;
+    fn package_files(&self) -> Result<Vec<PathBuf>>;
+    fn read_package_file(&self, path: &Path) -> Result<Vec<u8>>;
+}
+
+pub fn snapshot_packages<T: SnapshotSource>(
     cache_root: &Path,
-    resolution: &Resolution,
+    packages: &[T],
 ) -> Result<Vec<StoredPackage>> {
     let store_root = cache_root.join(STORE_ROOT);
     fs::create_dir_all(&store_root)
         .with_context(|| format!("failed to create store root {}", store_root.display()))?;
 
-    resolution
-        .packages
+    packages
         .par_iter()
         .map(|package| {
             let snapshot_root = snapshot_package(&store_root, package)?;
             Ok(StoredPackage {
-                digest: package.digest.clone(),
+                digest: package.digest().to_string(),
                 snapshot_root,
             })
         })
@@ -64,15 +68,12 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn snapshot_package(
-    store_root: &Path,
-    package: &crate::resolver::ResolvedPackage,
-) -> Result<PathBuf> {
-    let digest_dir_name = digest_directory_name(&package.digest)?;
+fn snapshot_package<T: SnapshotSource>(store_root: &Path, package: &T) -> Result<PathBuf> {
+    let digest_dir_name = digest_directory_name(package.digest())?;
     let digest_dir = store_root.join(digest_dir_name);
     let files = package.package_files()?;
     if digest_dir.exists() {
-        if snapshot_is_complete(&digest_dir, &package.manifest.root, &files)? {
+        if snapshot_is_complete(&digest_dir, package.package_root(), &files)? {
             return Ok(digest_dir);
         }
 
@@ -106,7 +107,7 @@ fn snapshot_package(
     let staging_root = staging.path().to_path_buf();
 
     for file in files {
-        let relative = file.strip_prefix(&package.manifest.root).with_context(|| {
+        let relative = file.strip_prefix(package.package_root()).with_context(|| {
             format!("failed to make {} relative to package root", file.display())
         })?;
         let target = staging_root.join(relative);
@@ -116,7 +117,6 @@ fn snapshot_package(
             })?;
         }
         let contents = package
-            .manifest
             .read_package_file(&file)
             .with_context(|| format!("failed to read {} for snapshot", file.display()))?;
         write_atomic(&target, &contents).with_context(|| {
@@ -201,7 +201,7 @@ mod tests {
 
         let reporter = Reporter::silent();
         let resolution = resolve_project_for_sync(temp.path(), cache.path(), &reporter).unwrap();
-        let stored = snapshot_resolution(cache.path(), &resolution).unwrap();
+        let stored = snapshot_packages(cache.path(), &resolution.packages).unwrap();
 
         assert_eq!(stored.len(), 1);
         assert!(
@@ -233,11 +233,11 @@ mod tests {
 
         let reporter = Reporter::silent();
         let resolution = resolve_project_for_sync(temp.path(), cache.path(), &reporter).unwrap();
-        let stored = snapshot_resolution(cache.path(), &resolution).unwrap();
+        let stored = snapshot_packages(cache.path(), &resolution.packages).unwrap();
         let snapshot_root = &stored[0].snapshot_root;
 
         fs::remove_file(snapshot_root.join("rules/common/coding-style.md")).unwrap();
-        let rebuilt = snapshot_resolution(cache.path(), &resolution).unwrap();
+        let rebuilt = snapshot_packages(cache.path(), &resolution.packages).unwrap();
 
         assert_eq!(rebuilt[0].snapshot_root, *snapshot_root);
         assert!(
@@ -271,7 +271,7 @@ beta = { path = "vendor/beta" }
 
         let reporter = Reporter::silent();
         let resolution = resolve_project_for_sync(temp.path(), cache.path(), &reporter).unwrap();
-        let stored = snapshot_resolution(cache.path(), &resolution).unwrap();
+        let stored = snapshot_packages(cache.path(), &resolution.packages).unwrap();
 
         let mut dependency_digests = resolution
             .packages

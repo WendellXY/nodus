@@ -20,7 +20,7 @@ use crate::report::Reporter;
 use crate::resolver::{
     PackageSource, ResolvedPackage, resolve_project_from_existing_lockfile_in_dir,
 };
-use crate::store::snapshot_resolution;
+use crate::store::snapshot_packages;
 
 #[derive(Debug, Clone)]
 pub struct RelaySummary {
@@ -335,7 +335,7 @@ fn load_workspace(
         reporter,
     )?;
     let selected_adapters = adapters_from_lockfile(&lockfile);
-    let snapshot_roots = snapshot_resolution(cache_root, &resolution)?
+    let snapshot_roots = snapshot_packages(cache_root, &resolution.packages)?
         .into_iter()
         .map(|stored| (stored.digest, stored.snapshot_root))
         .collect::<HashMap<_, _>>();
@@ -378,7 +378,7 @@ fn load_workspace_if_linked(
         reporter,
     )?;
     let selected_adapters = adapters_from_lockfile(&lockfile);
-    let snapshot_roots = snapshot_resolution(cache_root, &resolution)?
+    let snapshot_roots = snapshot_packages(cache_root, &resolution.packages)?
         .into_iter()
         .map(|stored| (stored.digest, stored.snapshot_root))
         .collect::<HashMap<_, _>>();

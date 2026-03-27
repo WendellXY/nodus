@@ -22,7 +22,7 @@ use crate::manifest::{
 use crate::paths::display_path;
 use crate::report::Reporter;
 use crate::selection::{resolve_adapter_selection, should_prompt_for_adapter};
-use crate::store::{snapshot_resolution, write_atomic};
+use crate::store::{SnapshotSource, snapshot_packages, write_atomic};
 
 #[derive(Debug, Clone)]
 pub struct Resolution {
@@ -418,7 +418,7 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
             "Snapshotting",
             format!("{} packages", resolution.packages.len()),
         )?;
-        let stored_packages = snapshot_resolution(cache_root, &resolution)?;
+        let stored_packages = snapshot_packages(cache_root, &resolution.packages)?;
 
         let snapshot_by_digest = stored_packages
             .into_iter()
@@ -1583,6 +1583,24 @@ impl ResolvedPackage {
 
     pub fn direct_managed_paths(&self) -> &[ResolvedManagedPath] {
         &self.direct_managed_paths
+    }
+}
+
+impl SnapshotSource for ResolvedPackage {
+    fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    fn package_root(&self) -> &Path {
+        &self.manifest.root
+    }
+
+    fn package_files(&self) -> Result<Vec<PathBuf>> {
+        ResolvedPackage::package_files(self)
+    }
+
+    fn read_package_file(&self, path: &Path) -> Result<Vec<u8>> {
+        self.manifest.read_package_file(path)
     }
 }
 
