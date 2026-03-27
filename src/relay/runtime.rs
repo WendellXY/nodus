@@ -719,7 +719,6 @@ fn build_mappings(
                 adapter,
                 package,
                 skill,
-                snapshot_root,
                 &source_root,
                 &target_root,
                 &managed_root,
@@ -823,7 +822,6 @@ fn skill_mappings(
     adapter: Adapter,
     package: &ResolvedPackage,
     skill: &SkillEntry,
-    snapshot_root: &Path,
     source_root: &Path,
     linked_root: &Path,
     managed_root: &Path,
@@ -853,7 +851,7 @@ fn skill_mappings(
         };
         mappings.push(file_mapping(
             managed_root.join(relative),
-            snapshot_root.join(&skill.path).join(relative),
+            source_root.join(relative),
             linked_root.join(relative),
             transform,
         ));
