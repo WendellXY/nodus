@@ -224,6 +224,9 @@ pub(super) fn load_codex_marketplace_wrapper(
                 plugin_root.display()
             );
         }
+        if plugin_root == loaded.root {
+            bail!("plugin `{name}` source path `{source}` must not point at the package root");
+        }
 
         let plugin_manifest = load_dependency_from_dir(&plugin_root).with_context(|| {
             format!(

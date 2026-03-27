@@ -738,6 +738,36 @@ fn accepts_dependency_repo_with_codex_marketplace_wrapper() {
 }
 
 #[test]
+fn rejects_codex_marketplace_with_plugin_source_that_points_at_package_root() {
+    let temp = TempDir::new().unwrap();
+    write_codex_marketplace(
+        temp.path(),
+        r#"{
+  "plugins": [
+    {
+      "name": "Axiom",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}"#,
+    );
+    write_codex_plugin_json(temp.path(), "2.34.0", None);
+
+    let error = load_dependency_from_dir(temp.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("must not point at the package root"));
+}
+
+#[test]
 fn prefers_standard_layout_over_marketplace_fallback() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
