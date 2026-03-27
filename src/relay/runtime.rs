@@ -816,7 +816,7 @@ fn ensure_disjoint_job_writes(jobs: &[RelayJobPlan]) -> Result<()> {
                 bail!(
                     "relay jobs for `{existing}` and `{}` both write {}",
                     job.dependency.alias,
-                    path.display()
+                    display_relative(&job.linked_repo, path)
                 );
             }
         }
