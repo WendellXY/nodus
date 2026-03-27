@@ -45,7 +45,7 @@ nodus add <package>
 如果你本身不想研究这些命令，最快的方式通常是：
 
 1. 先安装 `Nodus`
-2. 再对你的 agent 说一句：`请先阅读 README，然后帮我安装`
+2. 再对你的 agent 说一句：`请先阅读 https://github.com/WendellXY/nodus 的 README，然后帮我安装 nodus`
 
 很多情况下，这就是最省事的开始方式。
 
