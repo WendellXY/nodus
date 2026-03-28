@@ -744,6 +744,27 @@ pub(super) fn validate_dependency_managed_specs(
     Ok(())
 }
 
+pub(super) fn validate_managed_export_specs(managed_exports: &[ManagedExportSpec]) -> Result<()> {
+    if managed_exports.is_empty() {
+        return Ok(());
+    }
+
+    let mut seen = HashSet::new();
+    for mapping in managed_exports {
+        let normalized_source = mapping
+            .normalized_source()
+            .context("manifest field `managed_exports.source` is invalid")?;
+        let normalized_target = mapping
+            .normalized_target()
+            .context("manifest field `managed_exports.target` is invalid")?;
+        if !seen.insert((normalized_source, normalized_target, mapping.placement)) {
+            bail!("manifest field `managed_exports` must not contain duplicate entries");
+        }
+    }
+
+    Ok(())
+}
+
 pub(super) fn normalize_manifest_relative_path(value: &Path, label: &str) -> Result<PathBuf> {
     if value.as_os_str().is_empty() {
         bail!("{label} must not be empty");

@@ -113,6 +113,32 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
     if manifest.publish_root {
         output.push_str("publish_root = true\n");
     }
+    if !manifest.managed_exports.is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        for managed_export in &manifest.managed_exports {
+            output.push_str("[[managed_exports]]\n");
+            output.push_str(&format!(
+                "source = {}\n",
+                quote(&display_path(&managed_export.source))
+            ));
+            output.push_str(&format!(
+                "target = {}\n",
+                quote(&display_path(&managed_export.target))
+            ));
+            if !super::ManagedPlacement::is_package(&managed_export.placement) {
+                output.push_str(&format!(
+                    "placement = {}\n",
+                    quote(match managed_export.placement {
+                        super::ManagedPlacement::Package => "package",
+                        super::ManagedPlacement::Project => "project",
+                    })
+                ));
+            }
+            output.push('\n');
+        }
+    }
 
     if !manifest.capabilities.is_empty() {
         if !output.is_empty() {

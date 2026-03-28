@@ -1215,6 +1215,32 @@ fn serializes_managed_dependencies_as_expanded_tables() {
 }
 
 #[test]
+fn serializes_managed_exports_as_expanded_tables() {
+    let manifest = Manifest {
+        managed_exports: vec![
+            ManagedExportSpec {
+                source: PathBuf::from("learnings"),
+                target: PathBuf::from("learnings"),
+                placement: ManagedPlacement::Package,
+            },
+            ManagedExportSpec {
+                source: PathBuf::from("prompts/review.md"),
+                target: PathBuf::from("docs/review.md"),
+                placement: ManagedPlacement::Project,
+            },
+        ],
+        ..Manifest::default()
+    };
+
+    let encoded = serialize_manifest(&manifest).unwrap();
+
+    assert!(encoded.contains("[[managed_exports]]"));
+    assert!(encoded.contains("source = \"learnings\""));
+    assert!(encoded.contains("target = \"learnings\""));
+    assert!(encoded.contains("placement = \"project\""));
+}
+
+#[test]
 fn serializes_dev_dependencies() {
     let mut manifest = Manifest::default();
     manifest.dev_dependencies.insert(
@@ -1571,6 +1597,42 @@ target = "docs/templates"
 }
 
 #[test]
+fn parses_managed_export_tables() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+
+[[managed_exports]]
+source = "prompts/review.md"
+target = "docs/review.md"
+placement = "project"
+"#,
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+    assert_eq!(
+        loaded.manifest.managed_exports,
+        vec![
+            ManagedExportSpec {
+                source: PathBuf::from("learnings"),
+                target: PathBuf::from("learnings"),
+                placement: ManagedPlacement::Package,
+            },
+            ManagedExportSpec {
+                source: PathBuf::from("prompts/review.md"),
+                target: PathBuf::from("docs/review.md"),
+                placement: ManagedPlacement::Project,
+            }
+        ]
+    );
+}
+
+#[test]
 fn rejects_duplicate_aliases_across_dependency_sections() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
@@ -1754,6 +1816,45 @@ target = "docs/review.md"
 
     let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
     assert!(error.contains("managed.source"));
+}
+
+#[test]
+fn rejects_duplicate_managed_exports() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+
+[[managed_exports]]
+source = "./learnings"
+target = "./learnings"
+"#,
+    );
+
+    let error = load_dependency_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("managed_exports"));
+    assert!(error.contains("duplicate"));
+}
+
+#[test]
+fn rejects_managed_exports_with_parent_segments() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[[managed_exports]]
+source = "../learnings"
+target = "learnings"
+"#,
+    );
+
+    let error = load_dependency_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("managed_exports.source"));
 }
 
 #[test]

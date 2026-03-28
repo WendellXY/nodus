@@ -8,6 +8,7 @@ use semver::{Version, VersionReq};
 use super::discover::{
     canonicalize_existing_path, collect_files, default_package_name,
     normalize_manifest_relative_path, quote, validate_dependency_managed_specs,
+    validate_managed_export_specs,
 };
 use super::*;
 use crate::adapters::Adapter;
@@ -75,6 +76,8 @@ impl LoadedManifest {
                 self.root.display()
             );
         }
+
+        validate_managed_export_specs(&self.manifest.managed_exports)?;
 
         for (server_id, server) in &self.manifest.mcp_servers {
             validate_mcp_server(server_id, server)?;
@@ -568,6 +571,16 @@ impl ManagedPathSpec {
 
     pub fn normalized_target(&self) -> Result<PathBuf> {
         normalize_manifest_relative_path(&self.target, "managed target path")
+    }
+}
+
+impl ManagedExportSpec {
+    pub fn normalized_source(&self) -> Result<PathBuf> {
+        normalize_manifest_relative_path(&self.source, "managed export source path")
+    }
+
+    pub fn normalized_target(&self) -> Result<PathBuf> {
+        normalize_manifest_relative_path(&self.target, "managed export target path")
     }
 }
 

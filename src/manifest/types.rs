@@ -22,6 +22,8 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "is_false")]
     pub publish_root: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_exports: Vec<ManagedExportSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_servers: BTreeMap<String, McpServerConfig>,
@@ -110,6 +112,28 @@ pub struct DependencySpec {
 pub struct ManagedPathSpec {
     pub source: PathBuf,
     pub target: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedExportSpec {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    #[serde(default, skip_serializing_if = "ManagedPlacement::is_package")]
+    pub placement: ManagedPlacement,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedPlacement {
+    #[default]
+    Package,
+    Project,
+}
+
+impl ManagedPlacement {
+    pub const fn is_package(value: &Self) -> bool {
+        matches!(value, Self::Package)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
