@@ -30,6 +30,18 @@ content_roots = ["nodus-development"]
 # downstream consumers.
 publish_root = true
 
+[[managed_exports]]
+# Package-author owned managed export. By default Nodus writes this under
+# `.nodus/packages/<package-name>/learnings` in consumer repos.
+source = "learnings"
+target = "learnings"
+
+[[managed_exports]]
+# `placement = "project"` writes into the consumer project root instead.
+source = "prompts/review.md"
+target = "docs/review.md"
+placement = "project"
+
 [adapters]
 # Pick the runtime folders Nodus should manage in this repo.
 # Supported values: "agents", "claude", "codex", "copilot", "cursor", "opencode"
@@ -70,8 +82,7 @@ justification = "Run repository checks and maintenance commands."
 
 [dependencies]
 # This inline-table form is the most common and compact way to declare
-# dependencies. It is a good default when you just need to pin packages and do
-# not need nested `managed` mappings.
+# dependencies. It is a good default when you just need to pin packages.
 
 # Common case: consume a GitHub package by tag.
 playbook_ios = { github = "wenext-limited/playbook-ios", tag = "v0.6.0" }
@@ -92,11 +103,12 @@ axiom = { github = "CharlesWiltgen/Axiom", version = "^2.34.0" }
 paused = { github = "acme/paused-package", tag = "v1.0.0", enabled = false }
 
 [dependencies.shared]
-# Use the expanded table form when you want more room for comments or when you
-# need nested configuration such as `[[dependencies.<alias>.managed]]`.
+# Use the expanded table form when you want more room for comments.
 #
 # This local dependency also contributes extra files outside adapter-managed
-# runtime folders.
+# runtime folders, but package authors should prefer top-level `managed_exports`
+# in the dependency package. Root-level `[[dependencies.<alias>.managed]]`
+# remains as a legacy direct-dependency override surface.
 path = "vendor/shared"
 
 [[dependencies.shared.managed]]

@@ -362,7 +362,23 @@ internal = { path = "vendor/internal" }
 
 Set `enabled = false` to keep a dependency declared in `nodus.toml` without resolving it, syncing its managed outputs, or tracking it in `nodus.lock`.
 
-Direct dependencies can also map files or directories into the consuming repo:
+Package authors can now declare managed exports in the package itself:
+
+```toml
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+
+[[managed_exports]]
+source = "prompts/review.md"
+target = "docs/review.md"
+placement = "project"
+```
+
+`placement = "package"` is the default and writes under `.nodus/packages/<package-name>/...`.
+`placement = "project"` writes under the consumer repo root.
+
+Legacy root-manifest overrides are still supported for direct dependencies, but they are no longer the preferred authoring model:
 
 ```toml
 [dependencies.shared]
@@ -388,6 +404,7 @@ Packages can also declare:
 
 - `content_roots` to publish additional folders
 - `publish_root = true` to emit the root package itself
+- `managed_exports` to publish package-owned managed files or directories
 - `capabilities` for privileged behavior such as high-sensitivity actions
 
 If a package declares `high` sensitivity capabilities, install or update with:

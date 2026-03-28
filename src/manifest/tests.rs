@@ -1835,7 +1835,9 @@ target = "./learnings"
 "#,
     );
 
-    let error = load_dependency_from_dir(temp.path()).unwrap_err().to_string();
+    let error = load_dependency_from_dir(temp.path())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("managed_exports"));
     assert!(error.contains("duplicate"));
 }
@@ -1853,7 +1855,9 @@ target = "learnings"
 "#,
     );
 
-    let error = load_dependency_from_dir(temp.path()).unwrap_err().to_string();
+    let error = load_dependency_from_dir(temp.path())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("managed_exports.source"));
 }
 

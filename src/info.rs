@@ -12,7 +12,7 @@ use crate::domain::dependency_query::{
 };
 use crate::git::{ensure_git_dependency, normalize_alias_from_url, normalize_git_url};
 use crate::manifest::{
-    DependencyComponent, DependencySpec, LoadedManifest, PackageRole,
+    DependencyComponent, DependencySpec, LoadedManifest, ManagedPlacement, PackageRole,
     RequestedGitRef as ManifestRequestedGitRef, normalize_dependency_alias,
 };
 use crate::paths::display_path;
@@ -43,6 +43,7 @@ pub struct PackageInfo {
     rules: Vec<String>,
     commands: Vec<String>,
     mcp_servers: Vec<String>,
+    managed_exports: Vec<PackageManagedExport>,
     dependencies: Vec<String>,
     dev_dependencies: Vec<String>,
     capabilities: Vec<PackageCapability>,
@@ -71,6 +72,14 @@ struct PackageCapability {
     id: String,
     sensitivity: String,
     justification: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PackageManagedExport {
+    source: String,
+    target: String,
+    placement: String,
+    resolved_root: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -367,6 +376,25 @@ fn package_info_from_loaded(
             .map(|entry| entry.id.clone())
             .collect(),
         mcp_servers: manifest.manifest.mcp_servers.keys().cloned().collect(),
+        managed_exports: manifest
+            .manifest
+            .managed_exports
+            .iter()
+            .map(|managed_export| PackageManagedExport {
+                source: display_path(&managed_export.source),
+                target: display_path(&managed_export.target),
+                placement: match managed_export.placement {
+                    ManagedPlacement::Package => "package".into(),
+                    ManagedPlacement::Project => "project".into(),
+                },
+                resolved_root: match managed_export.placement {
+                    ManagedPlacement::Package => {
+                        format!(".nodus/packages/{}", manifest.effective_name())
+                    }
+                    ManagedPlacement::Project => ".".into(),
+                },
+            })
+            .collect(),
         dependencies,
         dev_dependencies,
         capabilities: manifest
@@ -519,6 +547,11 @@ impl PackageInfo {
             lines.extend(render_capability_lines(reporter, &self.capabilities));
         }
 
+        if !self.managed_exports.is_empty() {
+            lines.push(paint_label(reporter, "managed-exports:"));
+            lines.extend(render_managed_export_lines(reporter, &self.managed_exports));
+        }
+
         if !self.mcp_servers.is_empty() {
             lines.push(format!(
                 "{} {}",
@@ -645,6 +678,34 @@ fn render_capability_lines(reporter: &Reporter, capabilities: &[PackageCapabilit
             format!(
                 "  {id} = {sensitivity}{justification}",
                 sensitivity = capability.sensitivity,
+            )
+        })
+        .collect()
+}
+
+fn render_managed_export_lines(
+    reporter: &Reporter,
+    managed_exports: &[PackageManagedExport],
+) -> Vec<String> {
+    let width = managed_exports
+        .iter()
+        .map(|managed_export| managed_export.source.len())
+        .max()
+        .unwrap_or(0);
+    managed_exports
+        .iter()
+        .map(|managed_export| {
+            let padded = format!("{:width$}", managed_export.source, width = width);
+            let source = if reporter.color_enabled() {
+                reporter.paint(&padded, dim_style())
+            } else {
+                padded
+            };
+            format!(
+                "  {source} -> {target} ({placement}, root {resolved_root})",
+                target = managed_export.target,
+                placement = managed_export.placement,
+                resolved_root = managed_export.resolved_root,
             )
         })
         .collect()
@@ -931,6 +992,36 @@ args = ["-y", "firebase-tools", "mcp", "--dir", "."]
         let output = capture_info_output(package.path(), cache.path(), ".", None, None);
 
         assert!(output.contains("mcp-servers: firebase"));
+    }
+
+    #[test]
+    fn info_lists_managed_exports() {
+        let package = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+
+        write_file(
+            &package.path().join("nodus.toml"),
+            r#"
+name = "playbook-ios"
+
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+
+[[managed_exports]]
+source = "prompts/review.md"
+target = "docs/review.md"
+placement = "project"
+"#,
+        );
+        write_skill(package.path(), "Review");
+
+        let output = capture_info_output(package.path(), cache.path(), ".", None, None);
+
+        assert!(output.contains("managed-exports:"));
+        assert!(output.contains(".nodus/packages/playbook-ios"));
+        assert!(output.contains("learnings"));
+        assert!(output.contains("prompts/review.md -> docs/review.md (project, root .)"));
     }
 
     #[test]

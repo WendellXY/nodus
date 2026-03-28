@@ -430,7 +430,23 @@ internal = { path = "vendor/internal" }
 - 也不会同步受管理文件
 - 也不会写入 `nodus.lock`
 
-你还可以把文件或目录直接映射进使用方仓库：
+包作者现在也可以在包自己的 manifest 里声明受管理导出：
+
+```toml
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+
+[[managed_exports]]
+source = "prompts/review.md"
+target = "docs/review.md"
+placement = "project"
+```
+
+`placement = "package"` 是默认值，会写入 `.nodus/packages/<package-name>/...`。
+`placement = "project"` 会写入使用方仓库根目录。
+
+根 manifest 里的旧式直连映射仍然支持，但不再是推荐方式：
 
 ```toml
 [dependencies.shared]
@@ -456,6 +472,7 @@ Nodus 会从这些约定路径里发现一个包的内容：
 
 - `content_roots`：发布额外目录
 - `publish_root = true`：把根包自身一起导出
+- `managed_exports`：声明由包自己拥有的受管理文件或目录导出
 - `capabilities`：声明高权限或高敏感度行为
 
 如果某个包声明了 `high` 敏感度能力，安装或更新时需要显式允许：
