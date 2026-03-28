@@ -176,6 +176,7 @@ fn update_direct_dependencies_in_dir_mode(
         cache_root,
         false,
         allow_high_sensitivity,
+        false,
         &[],
         false,
         execution_mode,

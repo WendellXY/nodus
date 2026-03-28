@@ -224,6 +224,7 @@ fn add_dependency_at_paths_with_adapters_mode(
         cache_root,
         false,
         false,
+        false,
         options.adapters,
         false,
         execution_mode,
@@ -332,6 +333,7 @@ fn remove_dependency_at_paths_mode(
     let sync_summary = sync_with_loaded_root_at_paths(
         install_paths,
         cache_root,
+        false,
         false,
         false,
         &[],

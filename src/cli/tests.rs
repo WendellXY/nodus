@@ -418,6 +418,16 @@ fn parses_dry_run_flags_for_mutating_commands() {
 }
 
 #[test]
+fn parses_sync_force_flag() {
+    let cli = Cli::try_parse_from(["nodus", "sync", "--force"]).unwrap();
+
+    match cli.command {
+        Command::Sync { force, .. } => assert!(force),
+        other => panic!("expected sync command, got {other:?}"),
+    }
+}
+
+#[test]
 fn rejects_relay_watch_with_dry_run() {
     let error = Cli::try_parse_from(["nodus", "relay", "example/repo", "--watch", "--dry-run"])
         .unwrap_err();
@@ -484,6 +494,19 @@ fn mutating_subcommand_help_mentions_dry_run() {
             "{name} help missing shared-store explanation"
         );
     }
+}
+
+#[test]
+fn sync_help_describes_force() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    let help = root
+        .find_subcommand_mut("sync")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+
+    assert!(help.contains("--force"));
+    assert!(help.contains("Overwrite unmanaged files"));
 }
 
 #[test]
@@ -1061,6 +1084,7 @@ justification = "Run checks."
             locked: false,
             frozen: false,
             allow_high_sensitivity: true,
+            force: false,
             adapter: vec![],
             sync_on_launch: false,
             dry_run: false,
@@ -1086,6 +1110,7 @@ fn sync_dry_run_previews_without_writing_project_files() {
             locked: false,
             frozen: false,
             allow_high_sensitivity: false,
+            force: false,
             adapter: vec![Adapter::Codex],
             sync_on_launch: true,
             dry_run: true,
@@ -1113,6 +1138,7 @@ fn doctor_command_emits_checking_and_finished_lines() {
         cache.path(),
         false,
         false,
+        false,
         &[],
         false,
         &reporter,
@@ -1136,6 +1162,7 @@ fn doctor_command_emits_json_without_status_lines() {
     resolver::sync_in_dir_with_adapters(
         temp.path(),
         cache.path(),
+        false,
         false,
         false,
         &[],
@@ -1390,6 +1417,7 @@ fn sync_dry_run_locked_and_frozen_leave_state_unchanged() {
             locked: true,
             frozen: false,
             allow_high_sensitivity: false,
+            force: false,
             adapter: vec![],
             sync_on_launch: false,
             dry_run: true,
@@ -1402,6 +1430,7 @@ fn sync_dry_run_locked_and_frozen_leave_state_unchanged() {
             locked: false,
             frozen: true,
             allow_high_sensitivity: false,
+            force: false,
             adapter: vec![],
             sync_on_launch: false,
             dry_run: true,

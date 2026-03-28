@@ -188,6 +188,7 @@ pub fn sync_in_dir_with_adapters(
     cache_root: &Path,
     locked: bool,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     reporter: &Reporter,
@@ -202,6 +203,7 @@ pub fn sync_in_dir_with_adapters(
             SyncMode::Normal
         },
         allow_high_sensitivity,
+        force,
         adapters,
         sync_on_launch,
         ExecutionMode::Apply,
@@ -214,6 +216,7 @@ pub fn sync_in_dir_with_adapters_frozen(
     cwd: &Path,
     cache_root: &Path,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     reporter: &Reporter,
@@ -224,6 +227,7 @@ pub fn sync_in_dir_with_adapters_frozen(
         cache_root,
         SyncMode::Frozen,
         allow_high_sensitivity,
+        force,
         adapters,
         sync_on_launch,
         ExecutionMode::Apply,
@@ -237,6 +241,7 @@ pub fn sync_in_dir_with_adapters_dry_run(
     cache_root: &Path,
     locked: bool,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     reporter: &Reporter,
@@ -251,6 +256,7 @@ pub fn sync_in_dir_with_adapters_dry_run(
             SyncMode::Normal
         },
         allow_high_sensitivity,
+        force,
         adapters,
         sync_on_launch,
         ExecutionMode::DryRun,
@@ -263,6 +269,7 @@ pub fn sync_in_dir_with_adapters_frozen_dry_run(
     cwd: &Path,
     cache_root: &Path,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     reporter: &Reporter,
@@ -273,6 +280,7 @@ pub fn sync_in_dir_with_adapters_frozen_dry_run(
         cache_root,
         SyncMode::Frozen,
         allow_high_sensitivity,
+        force,
         adapters,
         sync_on_launch,
         ExecutionMode::DryRun,
@@ -287,6 +295,7 @@ fn sync_in_dir_with_adapters_mode(
     cache_root: &Path,
     sync_mode: SyncMode,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     execution_mode: ExecutionMode,
@@ -299,6 +308,7 @@ fn sync_in_dir_with_adapters_mode(
         cache_root,
         sync_mode,
         allow_high_sensitivity,
+        force,
         adapters,
         sync_on_launch,
         execution_mode,
@@ -318,6 +328,7 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
     cache_root: &Path,
     sync_mode: SyncMode,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     execution_mode: ExecutionMode,
@@ -476,6 +487,14 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
         if let Some(unmanaged_collision) =
             find_unmanaged_collision(planned_files, &owned_paths, &install_paths.runtime_root)
         {
+            if force {
+                reporter.note(format!(
+                    "forcing overwrite of unmanaged path {}",
+                    display_path(&unmanaged_collision.path)
+                ))?;
+                adopted_owned_paths.insert(unmanaged_collision.path.clone());
+                continue;
+            }
             let Some(managed_collision) = find_managed_collision(
                 &install_paths.runtime_root,
                 &resolution,
@@ -576,6 +595,7 @@ pub(crate) fn sync_in_dir_with_loaded_root(
     cache_root: &Path,
     locked: bool,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     execution_mode: ExecutionMode,
@@ -588,6 +608,7 @@ pub(crate) fn sync_in_dir_with_loaded_root(
         cache_root,
         locked,
         allow_high_sensitivity,
+        force,
         adapters,
         sync_on_launch,
         execution_mode,
@@ -602,6 +623,7 @@ pub(crate) fn sync_with_loaded_root_at_paths(
     cache_root: &Path,
     locked: bool,
     allow_high_sensitivity: bool,
+    force: bool,
     adapters: &[Adapter],
     sync_on_launch: bool,
     execution_mode: ExecutionMode,
@@ -617,6 +639,7 @@ pub(crate) fn sync_with_loaded_root_at_paths(
             SyncMode::Normal
         },
         allow_high_sensitivity,
+        force,
         adapters,
         sync_on_launch,
         execution_mode,

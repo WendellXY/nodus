@@ -280,6 +280,7 @@ fn sync_in_dir(
         cache_root,
         locked,
         allow_high_sensitivity,
+        false,
         &[],
         false,
         &reporter,
@@ -296,6 +297,7 @@ fn sync_in_dir_frozen(
         cwd,
         cache_root,
         allow_high_sensitivity,
+        false,
         &[],
         false,
         &reporter,
@@ -315,6 +317,47 @@ fn sync_in_dir_with_adapters(
         cache_root,
         locked,
         allow_high_sensitivity,
+        false,
+        adapters,
+        false,
+        &reporter,
+    )
+}
+
+fn sync_in_dir_with_adapters_force(
+    cwd: &Path,
+    cache_root: &Path,
+    locked: bool,
+    allow_high_sensitivity: bool,
+    adapters: &[Adapter],
+) -> Result<SyncSummary> {
+    let reporter = Reporter::silent();
+    super::sync_in_dir_with_adapters(
+        cwd,
+        cache_root,
+        locked,
+        allow_high_sensitivity,
+        true,
+        adapters,
+        false,
+        &reporter,
+    )
+}
+
+fn sync_in_dir_with_adapters_dry_run_force(
+    cwd: &Path,
+    cache_root: &Path,
+    locked: bool,
+    allow_high_sensitivity: bool,
+    adapters: &[Adapter],
+) -> Result<SyncSummary> {
+    let reporter = Reporter::silent();
+    super::sync_in_dir_with_adapters_dry_run(
+        cwd,
+        cache_root,
+        locked,
+        allow_high_sensitivity,
+        true,
         adapters,
         false,
         &reporter,
@@ -347,6 +390,7 @@ fn sync_in_dir_with_collision_choice(
         &install_paths,
         cache_root,
         SyncMode::Normal,
+        false,
         false,
         &Adapter::ALL,
         false,
@@ -441,6 +485,10 @@ fn sync_all(project_root: &Path, cache_root: &Path) {
 
 fn sync_all_result(project_root: &Path, cache_root: &Path) -> Result<SyncSummary> {
     sync_in_dir_with_adapters(project_root, cache_root, false, false, &Adapter::ALL)
+}
+
+fn sync_all_force_result(project_root: &Path, cache_root: &Path) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_force(project_root, cache_root, false, false, &Adapter::ALL)
 }
 
 fn add_dependency_all(project_root: &Path, cache_root: &Path, url: &str, tag: Option<&str>) {
@@ -2019,6 +2067,93 @@ shared = { path = "vendor/shared" }
 }
 
 #[test]
+fn sync_force_overwrites_unmanaged_runtime_skill_output() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(temp.path(), "");
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join(".codex/skills"),
+        "user-owned blocking file\n",
+    );
+
+    let error =
+        sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex])
+            .unwrap_err()
+            .to_string();
+    assert!(error.contains("refusing to overwrite unmanaged file"));
+    assert!(error.contains(".codex/skills"));
+
+    sync_in_dir_with_adapters_force(temp.path(), cache.path(), false, false, &[Adapter::Codex])
+        .unwrap();
+
+    let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let dependency = resolution
+        .packages
+        .iter()
+        .find(|package| package.alias == "shared")
+        .unwrap();
+    let managed_skill_id = namespaced_skill_id(dependency, "review");
+    let skill = fs::read_to_string(
+        temp.path()
+            .join(format!(".codex/skills/{managed_skill_id}/SKILL.md")),
+    )
+    .unwrap();
+    assert!(skill.contains("# Review"));
+}
+
+#[test]
+fn sync_dry_run_force_previews_without_overwriting_unmanaged_files() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(temp.path(), "");
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join(".codex/skills"),
+        "user-owned blocking file\n",
+    );
+
+    sync_in_dir_with_adapters_dry_run_force(
+        temp.path(),
+        cache.path(),
+        false,
+        false,
+        &[Adapter::Codex],
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".codex/skills")).unwrap(),
+        "user-owned blocking file\n"
+    );
+    let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    assert!(
+        !lockfile
+            .managed_files
+            .iter()
+            .any(|path| path.starts_with(".codex/skills/"))
+    );
+}
+
+#[test]
 fn sync_merges_direct_managed_runtime_root_gitignore_with_generated_outputs() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
@@ -2527,6 +2662,7 @@ fn sync_persists_launch_hook_configuration() {
         cache.path(),
         false,
         false,
+        false,
         &[Adapter::Codex],
         true,
         &reporter,
@@ -2593,6 +2729,7 @@ sync_on_startup = true
         cache.path(),
         false,
         false,
+        false,
         &[],
         false,
         &reporter,
@@ -2619,6 +2756,7 @@ fn sync_rejects_launch_hook_persistence_with_locked_flag() {
         cache.path(),
         true,
         false,
+        false,
         &[],
         true,
         &reporter,
@@ -2627,6 +2765,42 @@ fn sync_rejects_launch_hook_persistence_with_locked_flag() {
     .to_string();
 
     assert!(error.contains("launch hook configuration"));
+}
+
+#[test]
+fn sync_force_does_not_bypass_locked_stale_lockfile_checks() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+    let lockfile_before = fs::read(temp.path().join(LOCKFILE_NAME)).unwrap();
+
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+
+    let reporter = Reporter::silent();
+    super::sync_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        true,
+        false,
+        true,
+        &[],
+        false,
+        &reporter,
+    )
+    .unwrap_err();
+    assert_eq!(
+        fs::read(temp.path().join(LOCKFILE_NAME)).unwrap(),
+        lockfile_before
+    );
+    assert!(!temp.path().join(".codex/skills").exists());
 }
 
 #[test]
@@ -3152,6 +3326,45 @@ target = ".github/prompts/review.md"
 
     sync_in_dir_with_collision_choice(temp.path(), cache.path(), ManagedCollisionChoice::Adopt)
         .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".github/prompts/review.md")).unwrap(),
+        "Use the review prompt.\n"
+    );
+    let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    assert!(
+        lockfile
+            .managed_files
+            .contains(&".github/prompts/review.md".into())
+    );
+}
+
+#[test]
+fn sync_force_overwrites_unmanaged_collision_on_direct_managed_target() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.shared]
+path = "vendor/shared"
+
+[[dependencies.shared.managed]]
+source = "prompts/review.md"
+target = ".github/prompts/review.md"
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join("vendor/shared/prompts/review.md"),
+        "Use the review prompt.\n",
+    );
+    write_file(
+        &temp.path().join(".github/prompts/review.md"),
+        "user-owned prompt\n",
+    );
+
+    sync_all_force_result(temp.path(), cache.path()).unwrap();
 
     assert_eq!(
         fs::read_to_string(temp.path().join(".github/prompts/review.md")).unwrap(),
