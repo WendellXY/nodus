@@ -432,9 +432,9 @@ pub(crate) fn build_output_plan(
 
         merge_files(
             &mut plan.files,
-            direct_managed_files(project_root, package, snapshot_root)?,
+            managed_path_files(project_root, package, snapshot_root)?,
         )?;
-        register_direct_managed_paths(project_root, &mut plan.managed_files, package)?;
+        register_managed_paths(project_root, &mut plan.managed_files, package)?;
     }
 
     if let Some(file) = mcp_config_file(
@@ -530,19 +530,19 @@ fn gitignore_files(
     Ok(plan)
 }
 
-fn direct_managed_files(
+fn managed_path_files(
     project_root: &Path,
     package: &ResolvedPackage,
     snapshot_root: &Path,
 ) -> Result<Vec<ManagedFile>> {
     let mut files = Vec::new();
 
-    for mapping in package.direct_managed_paths() {
+    for mapping in package.managed_paths() {
         for file in &mapping.files {
             let contents =
                 fs::read(snapshot_root.join(&file.source_relative)).with_context(|| {
                     format!(
-                        "failed to read direct-managed source {} for `{}`",
+                        "failed to read managed source {} for `{}`",
                         file.source_relative.display(),
                         package.alias
                     )
@@ -557,12 +557,12 @@ fn direct_managed_files(
     Ok(files)
 }
 
-fn register_direct_managed_paths(
+fn register_managed_paths(
     project_root: &Path,
     managed_files: &mut BTreeSet<String>,
     package: &ResolvedPackage,
 ) -> Result<()> {
-    for mapping in package.direct_managed_paths() {
+    for mapping in package.managed_paths() {
         validate_direct_managed_root(project_root, managed_files, &mapping.ownership_root)?;
         managed_files.insert(display_relative(
             project_root,

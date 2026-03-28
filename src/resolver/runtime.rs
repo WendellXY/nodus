@@ -20,7 +20,8 @@ use crate::execution::ExecutionMode;
 use crate::install_paths::{InstallPaths, InstallScope};
 use crate::lockfile::{LOCKFILE_NAME, LockedPackage, LockedSource, Lockfile};
 use crate::manifest::{
-    DependencyComponent, LoadedManifest, PackageRole, load_root_from_dir_allow_missing,
+    DependencyComponent, LoadedManifest, ManagedPlacement, PackageRole,
+    load_root_from_dir_allow_missing,
 };
 use crate::paths::display_path;
 use crate::report::Reporter;
@@ -35,6 +36,7 @@ use std::fs;
 pub struct Resolution {
     pub packages: Vec<ResolvedPackage>,
     pub warnings: Vec<String>,
+    pub(crate) managed_migrations: Vec<ManagedMappingMigration>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +47,7 @@ pub struct ResolvedPackage {
     pub source: PackageSource,
     pub digest: String,
     pub selected_components: Option<Vec<DependencyComponent>>,
-    pub direct_managed_paths: Vec<ResolvedManagedPath>,
+    pub managed_paths: Vec<ResolvedManagedPath>,
     extra_package_files: Vec<PathBuf>,
 }
 
@@ -55,12 +57,26 @@ pub struct ResolvedManagedPath {
     pub target_root: PathBuf,
     pub ownership_root: PathBuf,
     pub files: Vec<ResolvedManagedFile>,
+    pub origin: ResolvedManagedPathOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ResolvedManagedFile {
     pub source_relative: PathBuf,
     pub target_relative: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedManagedPathOrigin {
+    LegacyDependencyMapping,
+    PackageManagedExport { placement: ManagedPlacement },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ManagedMappingMigration {
+    alias: String,
+    legacy_target_roots: Vec<PathBuf>,
+    adds_additional_package_exports: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +180,13 @@ struct ManagedCollision {
     alias: String,
     ownership_root: PathBuf,
     collision_path: PathBuf,
+    source: ManagedCollisionSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedCollisionSource {
+    LegacyDependencyMapping,
+    PackageManagedExport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,6 +450,40 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
                 .filter(|_| sync_mode.installs_from_lockfile()),
             Some(&root),
         )?;
+        if !resolution.managed_migrations().is_empty() {
+            if sync_mode.checks_lockfile() {
+                bail!(
+                    "legacy dependency `managed` mappings must be migrated before running {}; rerun plain `nodus sync` to let Nodus adopt package-owned `managed_exports`",
+                    sync_mode.flag(),
+                );
+            }
+            for migration in resolution.managed_migrations() {
+                for target_root in &migration.legacy_target_roots {
+                    if !root
+                        .manifest
+                        .remove_managed_mapping(&migration.alias, target_root)?
+                    {
+                        bail!(
+                            "failed to migrate legacy managed mapping for dependency `{}` targeting {}",
+                            migration.alias,
+                            target_root.display()
+                        );
+                    }
+                }
+                let mut message = format!(
+                    "migrating dependency `{}` to package-owned `managed_exports`",
+                    migration.alias
+                );
+                if migration.adds_additional_package_exports {
+                    message.push_str(
+                        "; package-declared exports include additional managed files beyond the legacy subset",
+                    );
+                }
+                reporter.note(message)?;
+            }
+            root = root.with_manifest(root.manifest.clone(), PackageRole::Root)?;
+            continue;
+        }
         reporter.status("Checking", "declared capabilities")?;
         enforce_capabilities(&resolution, allow_high_sensitivity, reporter)?;
         reporter.status(
@@ -530,6 +587,12 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
                     continue;
                 }
                 ManagedCollisionChoice::RemoveMapping => {
+                    if managed_collision.source != ManagedCollisionSource::LegacyDependencyMapping {
+                        bail!(
+                            "cannot remove package-owned managed export for dependency `{}` from the consumer manifest",
+                            managed_collision.alias
+                        );
+                    }
                     if !root.manifest.remove_managed_mapping(
                         &managed_collision.alias,
                         &managed_collision.ownership_root,
@@ -689,6 +752,10 @@ pub fn resolve_project_from_existing_lockfile_in_dir(
 }
 
 impl Resolution {
+    fn managed_migrations(&self) -> &[ManagedMappingMigration] {
+        &self.managed_migrations
+    }
+
     pub fn to_lockfile(
         &self,
         selected_adapters: Adapters,
@@ -878,8 +945,8 @@ impl ResolvedPackage {
         Ok(files)
     }
 
-    pub fn direct_managed_paths(&self) -> &[ResolvedManagedPath] {
-        &self.direct_managed_paths
+    pub fn managed_paths(&self) -> &[ResolvedManagedPath] {
+        &self.managed_paths
     }
 }
 

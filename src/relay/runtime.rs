@@ -432,6 +432,7 @@ fn load_workspace_if_linked(
             resolution: crate::resolver::Resolution {
                 packages: Vec::new(),
                 warnings: Vec::new(),
+                managed_migrations: Vec::new(),
             },
             snapshot_roots: HashMap::new(),
             local_config,
@@ -1030,7 +1031,7 @@ fn build_mappings(
         }
     }
 
-    for mapping in package.direct_managed_paths() {
+    for mapping in package.managed_paths() {
         for file in &mapping.files {
             mappings.push(file_mapping(
                 project_root.join(&file.target_relative),

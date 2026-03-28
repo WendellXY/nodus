@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -7,8 +7,8 @@ use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
 use super::{
-    PackageSource, Resolution, ResolveMode, ResolvedManagedFile, ResolvedManagedPath,
-    ResolvedPackage,
+    ManagedMappingMigration, PackageSource, Resolution, ResolveMode, ResolvedManagedFile,
+    ResolvedManagedPath, ResolvedManagedPathOrigin, ResolvedPackage,
 };
 use crate::git::{
     current_rev, ensure_git_dependency, ensure_git_dependency_at_rev, shared_checkout_path,
@@ -16,8 +16,8 @@ use crate::git::{
 };
 use crate::lockfile::{LOCKFILE_NAME, LockedSource, Lockfile};
 use crate::manifest::{
-    DependencyComponent, DependencySourceKind, DependencySpec, LoadedManifest, PackageRole,
-    RequestedGitRef, load_dependency_from_dir, load_root_from_dir,
+    DependencyComponent, DependencySourceKind, DependencySpec, LoadedManifest, ManagedExportSpec,
+    ManagedPlacement, PackageRole, RequestedGitRef, load_dependency_from_dir, load_root_from_dir,
 };
 use crate::paths::display_path;
 use crate::report::Reporter;
@@ -26,6 +26,7 @@ use crate::report::Reporter;
 struct ResolverState {
     stack: Vec<PathBuf>,
     resolved_by_path: HashMap<PathBuf, ResolvedPackage>,
+    managed_migrations: Vec<ManagedMappingMigration>,
 }
 
 #[derive(Clone, Copy)]
@@ -43,8 +44,9 @@ struct ResolvePackageInput {
     source: PackageSource,
     role: PackageRole,
     selected_components: Option<Vec<DependencyComponent>>,
-    direct_managed_paths: Vec<ResolvedManagedPath>,
+    incoming_managed_paths: Vec<ResolvedManagedPath>,
     extra_package_files: Vec<PathBuf>,
+    manifest_override: Option<LoadedManifest>,
 }
 
 pub(super) fn validate_git_package(package: &ResolvedPackage, cache_root: &Path) -> Result<()> {
@@ -105,8 +107,9 @@ pub(super) fn resolve_project(
             source: PackageSource::Root,
             role: PackageRole::Root,
             selected_components: None,
-            direct_managed_paths: Vec::new(),
+            incoming_managed_paths: Vec::new(),
             extra_package_files: Vec::new(),
+            manifest_override: None,
         },
         &mut state,
     )?;
@@ -123,7 +126,11 @@ pub(super) fn resolve_project(
         .flat_map(|package| package.manifest.warnings.iter().cloned())
         .collect();
 
-    Ok(Resolution { packages, warnings })
+    Ok(Resolution {
+        packages,
+        warnings,
+        managed_migrations: state.managed_migrations,
+    })
 }
 
 fn resolve_package(
@@ -137,17 +144,18 @@ fn resolve_package(
         source,
         role,
         selected_components,
-        direct_managed_paths,
+        incoming_managed_paths,
         extra_package_files,
+        manifest_override,
     } = input;
     if let Some(existing) = state.resolved_by_path.get_mut(&package_root) {
         existing.selected_components =
             union_selected_components(existing.selected_components.clone(), selected_components);
-        if !direct_managed_paths.is_empty() {
-            existing.direct_managed_paths = merge_direct_managed_paths(
+        if !incoming_managed_paths.is_empty() {
+            existing.managed_paths = merge_managed_paths(
                 &package_root,
-                &existing.direct_managed_paths,
-                &direct_managed_paths,
+                &existing.managed_paths,
+                &incoming_managed_paths,
             )?;
             merge_extra_package_files(&mut existing.extra_package_files, &extra_package_files);
             existing.digest =
@@ -171,14 +179,35 @@ fn resolve_package(
 
     let manifest = match role {
         PackageRole::Root => {
-            if let Some(root_override) = context.root_override {
+            if let Some(manifest_override) = manifest_override {
+                manifest_override
+            } else if let Some(root_override) = context.root_override {
                 root_override.clone()
             } else {
                 load_root_from_dir(&package_root)?
             }
         }
-        PackageRole::Dependency => load_dependency_from_dir(&package_root)?,
+        PackageRole::Dependency => {
+            if let Some(manifest_override) = manifest_override {
+                manifest_override
+            } else {
+                load_dependency_from_dir(&package_root)?
+            }
+        }
     };
+
+    let (package_managed_paths, package_extra_files) = if role == PackageRole::Dependency {
+        resolve_package_managed_exports(&alias, &manifest, &package_root)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let mut extra_package_files = extra_package_files;
+    merge_extra_package_files(&mut extra_package_files, &package_extra_files);
+    let managed_paths = merge_managed_paths(
+        &package_root,
+        &incoming_managed_paths,
+        &package_managed_paths,
+    )?;
 
     let dependencies = manifest
         .manifest
@@ -195,7 +224,7 @@ fn resolve_package(
         source,
         digest,
         selected_components,
-        direct_managed_paths,
+        managed_paths,
         extra_package_files,
     };
     state
@@ -229,8 +258,18 @@ fn resolve_dependency(
                 path: declared_path.clone(),
                 tag: dependency.tag.clone(),
             };
-            let (direct_managed_paths, extra_package_files) =
-                resolve_direct_managed_paths(parent_role, alias, dependency, &dependency_root)?;
+            let dependency_manifest = load_dependency_from_dir(&dependency_root)?;
+            let (incoming_managed_paths, extra_package_files, managed_migration) =
+                resolve_incoming_managed_paths(
+                    parent_role,
+                    alias,
+                    dependency,
+                    &dependency_manifest,
+                    &dependency_root,
+                )?;
+            if let Some(managed_migration) = managed_migration {
+                state.managed_migrations.push(managed_migration);
+            }
             resolve_package(
                 context,
                 ResolvePackageInput {
@@ -239,8 +278,9 @@ fn resolve_dependency(
                     source,
                     role: PackageRole::Dependency,
                     selected_components: dependency.effective_selected_components(),
-                    direct_managed_paths,
+                    incoming_managed_paths,
                     extra_package_files,
+                    manifest_override: Some(dependency_manifest),
                 },
                 state,
             )
@@ -280,8 +320,18 @@ fn resolve_dependency(
                 branch: checkout.branch,
                 rev: checkout.rev,
             };
-            let (direct_managed_paths, extra_package_files) =
-                resolve_direct_managed_paths(parent_role, alias, dependency, &checkout.path)?;
+            let dependency_manifest = load_dependency_from_dir(&checkout.path)?;
+            let (incoming_managed_paths, extra_package_files, managed_migration) =
+                resolve_incoming_managed_paths(
+                    parent_role,
+                    alias,
+                    dependency,
+                    &dependency_manifest,
+                    &checkout.path,
+                )?;
+            if let Some(managed_migration) = managed_migration {
+                state.managed_migrations.push(managed_migration);
+            }
             resolve_package(
                 context,
                 ResolvePackageInput {
@@ -290,8 +340,9 @@ fn resolve_dependency(
                     source,
                     role: PackageRole::Dependency,
                     selected_components: dependency.effective_selected_components(),
-                    direct_managed_paths,
+                    incoming_managed_paths,
                     extra_package_files,
+                    manifest_override: Some(dependency_manifest),
                 },
                 state,
             )
@@ -380,7 +431,55 @@ fn union_selected_components(
     }
 }
 
-fn resolve_direct_managed_paths(
+fn resolve_incoming_managed_paths(
+    parent_role: PackageRole,
+    alias: &str,
+    dependency: &DependencySpec,
+    dependency_manifest: &LoadedManifest,
+    dependency_root: &Path,
+) -> Result<(
+    Vec<ResolvedManagedPath>,
+    Vec<PathBuf>,
+    Option<ManagedMappingMigration>,
+)> {
+    let (legacy_paths, legacy_files) =
+        resolve_legacy_dependency_managed_paths(parent_role, alias, dependency, dependency_root)?;
+    let (package_paths, package_files) =
+        resolve_package_managed_exports(alias, dependency_manifest, dependency_root)?;
+
+    if legacy_paths.is_empty() {
+        return Ok((Vec::new(), Vec::new(), None));
+    }
+    if package_paths.is_empty() {
+        return Ok((legacy_paths, legacy_files, None));
+    }
+
+    let legacy_entries = managed_file_entries(&legacy_paths);
+    let package_entries = managed_file_entries(&package_paths);
+    if !legacy_entries.is_subset(&package_entries) {
+        bail!(
+            "dependency `{alias}` declares both legacy `[[dependencies.{alias}.managed]]` entries in the root manifest and package-owned `[[managed_exports]]`; remove the legacy root mappings because they do not match the package exports"
+        );
+    }
+
+    let mut extra_package_files = package_files;
+    merge_extra_package_files(&mut extra_package_files, &legacy_files);
+    Ok((
+        package_paths,
+        extra_package_files,
+        Some(ManagedMappingMigration {
+            alias: alias.to_string(),
+            legacy_target_roots: dependency
+                .managed_mappings()
+                .iter()
+                .map(|mapping| mapping.normalized_target())
+                .collect::<Result<Vec<_>>>()?,
+            adds_additional_package_exports: package_entries.len() > legacy_entries.len(),
+        }),
+    ))
+}
+
+fn resolve_legacy_dependency_managed_paths(
     parent_role: PackageRole,
     alias: &str,
     dependency: &DependencySpec,
@@ -395,14 +494,90 @@ fn resolve_direct_managed_paths(
         );
     }
 
+    resolve_managed_paths(
+        alias,
+        dependency_root,
+        dependency
+            .managed_mappings()
+            .iter()
+            .map(|spec| {
+                Ok(ResolvedManagedPathSpec {
+                    source_root: spec.normalized_source()?,
+                    target_root: spec.normalized_target()?,
+                    origin: ResolvedManagedPathOrigin::LegacyDependencyMapping,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    )
+}
+
+fn resolve_package_managed_exports(
+    alias: &str,
+    dependency_manifest: &LoadedManifest,
+    dependency_root: &Path,
+) -> Result<(Vec<ResolvedManagedPath>, Vec<PathBuf>)> {
+    if dependency_manifest.manifest.managed_exports.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let package_name = dependency_manifest.effective_name();
+    resolve_managed_paths(
+        alias,
+        dependency_root,
+        dependency_manifest
+            .manifest
+            .managed_exports
+            .iter()
+            .map(|spec| resolve_managed_export_spec(spec, &package_name))
+            .collect::<Result<Vec<_>>>()?,
+    )
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedManagedPathSpec {
+    source_root: PathBuf,
+    target_root: PathBuf,
+    origin: ResolvedManagedPathOrigin,
+}
+
+fn resolve_managed_export_spec(
+    spec: &ManagedExportSpec,
+    package_name: &str,
+) -> Result<ResolvedManagedPathSpec> {
+    let target_root = match spec.placement {
+        ManagedPlacement::Package => PathBuf::from(".nodus")
+            .join("packages")
+            .join(package_name)
+            .join(spec.normalized_target()?),
+        ManagedPlacement::Project => spec.normalized_target()?,
+    };
+
+    Ok(ResolvedManagedPathSpec {
+        source_root: spec.normalized_source()?,
+        target_root,
+        origin: ResolvedManagedPathOrigin::PackageManagedExport {
+            placement: spec.placement,
+        },
+    })
+}
+
+fn resolve_managed_paths(
+    alias: &str,
+    dependency_root: &Path,
+    specs: Vec<ResolvedManagedPathSpec>,
+) -> Result<(Vec<ResolvedManagedPath>, Vec<PathBuf>)> {
+    if specs.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
     let mut ownership_roots = Vec::<PathBuf>::new();
-    let mut concrete_targets = std::collections::HashSet::<PathBuf>::new();
+    let mut concrete_targets = HashSet::<PathBuf>::new();
     let mut mappings = Vec::new();
     let mut extra_package_files = Vec::new();
 
-    for spec in dependency.managed_mappings() {
-        let source_root = spec.normalized_source()?;
-        let target_root = spec.normalized_target()?;
+    for spec in specs {
+        let source_root = spec.source_root;
+        let target_root = spec.target_root;
         validate_managed_ownership_root(alias, &ownership_roots, &target_root)?;
 
         let source_path =
@@ -412,7 +587,7 @@ fn resolve_direct_managed_paths(
         let files = if metadata.is_file() {
             if !concrete_targets.insert(target_root.clone()) {
                 bail!(
-                    "dependency `{alias}` field `managed` maps multiple sources into {}",
+                    "dependency `{alias}` managed mapping resolves multiple sources into {}",
                     target_root.display()
                 );
             }
@@ -435,7 +610,7 @@ fn resolve_direct_managed_paths(
                 let target_relative = target_root.join(relative);
                 if !concrete_targets.insert(target_relative.clone()) {
                     bail!(
-                        "dependency `{alias}` field `managed` maps multiple sources into {}",
+                        "dependency `{alias}` managed mapping resolves multiple sources into {}",
                         target_relative.display()
                     );
                 }
@@ -462,6 +637,7 @@ fn resolve_direct_managed_paths(
             target_root: target_root.clone(),
             ownership_root: target_root,
             files,
+            origin: spec.origin,
         });
     }
 
@@ -509,7 +685,7 @@ fn resolve_dependency_managed_source_path(
     Ok(canonical)
 }
 
-fn merge_direct_managed_paths(
+fn merge_managed_paths(
     package_root: &Path,
     existing: &[ResolvedManagedPath],
     incoming: &[ResolvedManagedPath],
@@ -526,7 +702,7 @@ fn merge_direct_managed_paths(
                 || path.ownership_root.starts_with(&existing.ownership_root)
         }) {
             bail!(
-                "direct-managed targets for {} overlap at `{}` and `{}`",
+                "managed targets for {} overlap at `{}` and `{}`",
                 package_root.display(),
                 conflict.ownership_root.display(),
                 path.ownership_root.display()
@@ -543,7 +719,7 @@ fn merge_direct_managed_paths(
             .find(|file| existing_targets.contains(&file.target_relative))
         {
             bail!(
-                "direct-managed targets for {} overlap at `{}`",
+                "managed targets for {} overlap at `{}`",
                 package_root.display(),
                 conflict.target_relative.display()
             );
@@ -559,6 +735,17 @@ fn merge_extra_package_files(target: &mut Vec<PathBuf>, extra_files: &[PathBuf])
     target.extend(extra_files.iter().cloned());
     target.sort();
     target.dedup();
+}
+
+fn managed_file_entries(managed_paths: &[ResolvedManagedPath]) -> HashSet<(PathBuf, PathBuf)> {
+    managed_paths
+        .iter()
+        .flat_map(|path| {
+            path.files
+                .iter()
+                .map(|file| (file.source_relative.clone(), file.target_relative.clone()))
+        })
+        .collect()
 }
 
 fn compute_package_digest(

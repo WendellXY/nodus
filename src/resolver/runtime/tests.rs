@@ -3179,6 +3179,132 @@ target = ".github/prompts/review.md"
 }
 
 #[test]
+fn sync_writes_package_managed_exports_under_nodus_packages() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.shared]
+path = "vendor/shared"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/shared"),
+        r#"
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join("vendor/shared/learnings/review.md"),
+        "Use the learning pack.\n",
+    );
+
+    sync_all(temp.path(), cache.path());
+
+    assert_eq!(
+        fs::read_to_string(
+            temp.path()
+                .join(".nodus/packages/shared/learnings/review.md")
+        )
+        .unwrap(),
+        "Use the learning pack.\n"
+    );
+    let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    assert!(
+        lockfile
+            .managed_files
+            .contains(&".nodus/packages/shared/learnings".into())
+    );
+}
+
+#[test]
+fn sync_writes_project_scoped_package_managed_exports() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.shared]
+path = "vendor/shared"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/shared"),
+        r#"
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+placement = "project"
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join("vendor/shared/learnings/review.md"),
+        "Project-root learning.\n",
+    );
+
+    sync_all(temp.path(), cache.path());
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join("learnings/review.md")).unwrap(),
+        "Project-root learning.\n"
+    );
+}
+
+#[test]
+fn sync_emits_transitive_package_managed_exports() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.wrapper]
+path = "vendor/wrapper"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/wrapper"),
+        r#"
+[dependencies.leaf]
+path = "vendor/leaf"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/wrapper/vendor/leaf"),
+        r#"
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+"#,
+    );
+    write_skill(
+        &temp.path().join("vendor/wrapper/skills/wrapper"),
+        "Wrapper",
+    );
+    write_skill(
+        &temp.path().join("vendor/wrapper/vendor/leaf/skills/leaf"),
+        "Leaf",
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/wrapper/vendor/leaf/learnings/review.md"),
+        "Transitive learning.\n",
+    );
+
+    sync_all(temp.path(), cache.path());
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".nodus/packages/leaf/learnings/review.md")).unwrap(),
+        "Transitive learning.\n"
+    );
+}
+
+#[test]
 fn sync_writes_and_prunes_direct_managed_directory_targets() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
@@ -3228,6 +3354,96 @@ target = "docs/templates"
         fs::read_to_string(temp.path().join("docs/templates/user.md")).unwrap(),
         "keep me\n"
     );
+}
+
+#[test]
+fn sync_migrates_subset_legacy_managed_paths_to_package_exports() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.shared]
+path = "vendor/shared"
+
+[[dependencies.shared.managed]]
+source = "learnings"
+target = "learnings"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/shared"),
+        r#"
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+placement = "project"
+
+[[managed_exports]]
+source = "prompts"
+target = "prompts"
+placement = "project"
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join("vendor/shared/learnings/review.md"),
+        "Migrated learning.\n",
+    );
+    write_file(
+        &temp.path().join("vendor/shared/prompts/review.md"),
+        "Migrated prompt.\n",
+    );
+
+    sync_all(temp.path(), cache.path());
+
+    let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
+    assert!(!manifest.contains("[[dependencies.shared.managed]]"));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("learnings/review.md")).unwrap(),
+        "Migrated learning.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("prompts/review.md")).unwrap(),
+        "Migrated prompt.\n"
+    );
+}
+
+#[test]
+fn sync_rejects_non_subset_legacy_managed_paths_when_package_exports_exist() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.shared]
+path = "vendor/shared"
+
+[[dependencies.shared.managed]]
+source = "learnings"
+target = "docs/learnings"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/shared"),
+        r#"
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+placement = "project"
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join("vendor/shared/learnings/review.md"),
+        "Mismatch.\n",
+    );
+
+    let error = sync_all_result(temp.path(), cache.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("managed_exports"));
+    assert!(error.contains("remove the legacy root mappings"));
 }
 
 #[test]

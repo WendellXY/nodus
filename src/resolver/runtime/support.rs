@@ -8,8 +8,8 @@ use rayon::prelude::*;
 
 use super::{
     DoctorSummary, ManagedCollision, ManagedCollisionChoice, ManagedCollisionResolver,
-    PlannedFileWrite, Resolution, SyncExecutionPlan, SyncMode, SyncSummary,
-    TtyManagedCollisionResolver, UnmanagedCollision,
+    ManagedCollisionSource, PlannedFileWrite, Resolution, ResolvedManagedPathOrigin,
+    SyncExecutionPlan, SyncMode, SyncSummary, TtyManagedCollisionResolver, UnmanagedCollision,
 };
 use crate::adapters::{Adapters, ManagedFile, build_output_plan};
 use crate::execution::{ExecutionMode, PreviewChange};
@@ -379,7 +379,7 @@ pub(super) fn find_managed_collision(
     collision: &UnmanagedCollision,
 ) -> Option<ManagedCollision> {
     for package in &resolution.packages {
-        for managed_path in package.direct_managed_paths() {
+        for managed_path in package.managed_paths() {
             let ownership_root = project_root.join(&managed_path.ownership_root);
             if collision.path == ownership_root
                 || collision.path.starts_with(&ownership_root)
@@ -389,6 +389,7 @@ pub(super) fn find_managed_collision(
                     alias: package.alias.clone(),
                     ownership_root: managed_path.ownership_root.clone(),
                     collision_path: collision.path.clone(),
+                    source: managed_collision_source(managed_path.origin),
                 });
             }
 
@@ -400,6 +401,7 @@ pub(super) fn find_managed_collision(
                     alias: package.alias.clone(),
                     ownership_root: managed_path.ownership_root.clone(),
                     collision_path: collision.path.clone(),
+                    source: managed_collision_source(managed_path.origin),
                 });
             }
         }
@@ -413,13 +415,22 @@ pub(super) fn unmanaged_collision_guidance(
     collision: &ManagedCollision,
     sync_mode: SyncMode,
 ) -> String {
-    format!(
-        "refusing to overwrite unmanaged file {}. Managed target {} from dependency `{}` collides with an existing path. Rerun plain `nodus sync` on a TTY to choose whether to adopt that target, remove the managed mapping from `nodus.toml`, or cancel; {} cannot prompt interactively",
-        display_path(&collision.collision_path),
-        display_path(&project_root.join(&collision.ownership_root)),
-        collision.alias,
-        sync_mode.flag(),
-    )
+    match collision.source {
+        ManagedCollisionSource::LegacyDependencyMapping => format!(
+            "refusing to overwrite unmanaged file {}. Managed target {} from dependency `{}` collides with an existing path. Rerun plain `nodus sync` on a TTY to choose whether to adopt that target, remove the managed mapping from `nodus.toml`, or cancel; {} cannot prompt interactively",
+            display_path(&collision.collision_path),
+            display_path(&project_root.join(&collision.ownership_root)),
+            collision.alias,
+            sync_mode.flag(),
+        ),
+        ManagedCollisionSource::PackageManagedExport => format!(
+            "refusing to overwrite unmanaged file {}. Package-owned managed export {} from dependency `{}` collides with an existing path. Rerun plain `nodus sync` on a TTY to choose whether to adopt that target or cancel; {} cannot prompt interactively",
+            display_path(&collision.collision_path),
+            display_path(&project_root.join(&collision.ownership_root)),
+            collision.alias,
+            sync_mode.flag(),
+        ),
+    }
 }
 
 impl ManagedCollisionResolver for TtyManagedCollisionResolver {
@@ -444,7 +455,11 @@ fn prompt_for_managed_collision(
 ) -> Result<ManagedCollisionChoice> {
     writeln!(
         output,
-        "Managed target {} from dependency `{}` collides with existing unmanaged path {}.",
+        "{} {} from dependency `{}` collides with existing unmanaged path {}.",
+        match collision.source {
+            ManagedCollisionSource::LegacyDependencyMapping => "Managed target",
+            ManagedCollisionSource::PackageManagedExport => "Package-owned managed export",
+        },
         display_path(&project_root.join(&collision.ownership_root)),
         collision.alias,
         display_path(&collision.collision_path)
@@ -454,25 +469,50 @@ fn prompt_for_managed_collision(
         output,
         "  1. adopt  (let Nodus take ownership and overwrite managed files under that target)"
     )?;
-    writeln!(
-        output,
-        "  2. remove (delete the corresponding managed mapping from nodus.toml and continue)"
-    )?;
-    writeln!(output, "  3. cancel")?;
+    if collision.source == ManagedCollisionSource::LegacyDependencyMapping {
+        writeln!(
+            output,
+            "  2. remove (delete the corresponding managed mapping from nodus.toml and continue)"
+        )?;
+        writeln!(output, "  3. cancel")?;
+    } else {
+        writeln!(output, "  2. cancel")?;
+    }
     write!(output, "> ")?;
     output.flush()?;
 
     let mut line = String::new();
     input.read_line(&mut line)?;
-    parse_managed_collision_choice(&line)
+    parse_managed_collision_choice(&line, collision.source)
 }
 
-fn parse_managed_collision_choice(answer: &str) -> Result<ManagedCollisionChoice> {
-    match answer.trim().to_ascii_lowercase().as_str() {
-        "1" | "adopt" => Ok(ManagedCollisionChoice::Adopt),
-        "2" | "remove" => Ok(ManagedCollisionChoice::RemoveMapping),
-        "3" | "cancel" => Ok(ManagedCollisionChoice::Cancel),
-        other => bail!("invalid collision resolution `{other}`"),
+fn parse_managed_collision_choice(
+    answer: &str,
+    source: ManagedCollisionSource,
+) -> Result<ManagedCollisionChoice> {
+    match (source, answer.trim().to_ascii_lowercase().as_str()) {
+        (_, "1" | "adopt") => Ok(ManagedCollisionChoice::Adopt),
+        (ManagedCollisionSource::LegacyDependencyMapping, "2" | "remove") => {
+            Ok(ManagedCollisionChoice::RemoveMapping)
+        }
+        (ManagedCollisionSource::LegacyDependencyMapping, "3" | "cancel") => {
+            Ok(ManagedCollisionChoice::Cancel)
+        }
+        (ManagedCollisionSource::PackageManagedExport, "2" | "cancel") => {
+            Ok(ManagedCollisionChoice::Cancel)
+        }
+        (_, other) => bail!("invalid collision resolution `{other}`"),
+    }
+}
+
+fn managed_collision_source(origin: ResolvedManagedPathOrigin) -> ManagedCollisionSource {
+    match origin {
+        ResolvedManagedPathOrigin::LegacyDependencyMapping => {
+            ManagedCollisionSource::LegacyDependencyMapping
+        }
+        ResolvedManagedPathOrigin::PackageManagedExport { .. } => {
+            ManagedCollisionSource::PackageManagedExport
+        }
     }
 }
 
