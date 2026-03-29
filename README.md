@@ -17,9 +17,9 @@
 
 <p align="center">
   <a href="#install">Install</a> •
+  <a href="#for-ai-assistants">For AI Assistants</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#cli-help">CLI Help</a> •
-  <a href="#for-ai-assistants">For AI Assistants</a> •
   <a href="#learn-more">Learn More</a> •
   <a href="./CONTRIBUTING.md">Contributing</a>
 </p>
@@ -81,6 +81,14 @@ pwsh -NoProfile -Command "irm https://nodus.elata.ai/install.ps1 | iex"
 
 </details>
 
+## For AI Assistants
+
+If you want an AI assistant to operate Nodus for you, give it the public docs link:
+
+- <https://nodus.elata.ai/docs/>
+
+That docs flow gives the assistant a public guide for the install and package workflow, helps it choose the right `nodus add` command, and still ends with `nodus doctor`.
+
 ## Quick Start
 
 Install a package into the current repo and verify the result:
@@ -124,14 +132,6 @@ Commands most users need:
 - `nodus update` to move dependencies to newer allowed revisions
 - `nodus remove <alias>` to remove a dependency and prune what it owned
 - `nodus doctor` to check that the repo, lockfile, shared store, and managed outputs still agree
-
-## For AI Assistants
-
-If you want an AI assistant to operate Nodus for you, use the dedicated assistant docs:
-
-- [docs/prompts/README.md](./docs/prompts/README.md)
-
-Those docs explain how an assistant should identify the repo role, choose adapters, prefer safe defaults, and finish with `nodus doctor`.
 
 ## Learn More
 

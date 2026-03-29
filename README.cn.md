@@ -17,9 +17,9 @@
 
 <p align="center">
   <a href="#install">安装</a> •
+  <a href="#for-ai-assistants">给 AI 助手</a> •
   <a href="#quick-start">快速开始</a> •
   <a href="#cli-help">CLI 帮助</a> •
-  <a href="#for-ai-assistants">给 AI 助手</a> •
   <a href="#learn-more">继续了解</a> •
   <a href="./CONTRIBUTING.md">参与贡献</a>
 </p>
@@ -81,6 +81,14 @@ pwsh -NoProfile -Command "irm https://nodus.elata.ai/install.ps1 | iex"
 
 </details>
 
+## 给 AI 助手
+
+如果你希望把 Nodus 的使用流程直接交给 AI 助手，可以把公开文档链接发给它：
+
+- <https://nodus.elata.ai/zh-cn/docs/>
+
+这套公开文档会给助手一个可直接访问的安装与加包流程，帮助它生成合适的 `nodus add` 命令，并最终用 `nodus doctor` 做验证。
+
 ## 快速开始
 
 把一个包安装到当前仓库，并检查结果：
@@ -124,14 +132,6 @@ nodus doctor --help
 - `nodus update`：把依赖升级到更新但仍允许的版本
 - `nodus remove <alias>`：移除依赖并清理它拥有的输出
 - `nodus doctor`：检查仓库、lockfile、共享存储和受管理输出是否一致
-
-## 给 AI 助手
-
-如果你希望把 Nodus 操作直接交给 AI 助手，可以使用专门的说明文档：
-
-- [docs/prompts/README.cn.md](./docs/prompts/README.cn.md)
-
-这些文档会说明助手应该如何判断仓库角色、选择 adapter、优先使用安全默认值，以及最后如何用 `nodus doctor` 做收尾检查。
 
 ## 继续了解
 
