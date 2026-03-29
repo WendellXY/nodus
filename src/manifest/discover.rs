@@ -751,33 +751,64 @@ fn discover_skills(root: &Path, discovery_root: &Path) -> Result<Vec<SkillEntry>
     }
 
     let mut skills = Vec::new();
-    for entry in fs::read_dir(&skills_root)
-        .with_context(|| format!("failed to read {}", skills_root.display()))?
+    discover_skills_in_dir(
+        root,
+        &skills_relative_root,
+        &skills_relative_root,
+        &mut skills,
+    )?;
+
+    skills.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(skills)
+}
+
+fn discover_skills_in_dir(
+    root: &Path,
+    skills_relative_root: &Path,
+    current_relative_dir: &Path,
+    skills: &mut Vec<SkillEntry>,
+) -> Result<bool> {
+    let current_dir = root.join(current_relative_dir);
+    let mut found_skill = false;
+
+    for entry in fs::read_dir(&current_dir)
+        .with_context(|| format!("failed to read {}", current_dir.display()))?
     {
         let entry = entry?;
-        if should_ignore_discovery_entry(&entry.path()) {
+        let path = entry.path();
+        if should_ignore_discovery_entry(&path) {
             continue;
         }
-        if !entry.path().is_dir() {
+        if !path.is_dir() {
             bail!(
                 "`{}` entries must be directories",
                 skills_relative_root.display()
             );
         }
 
-        let id = entry.file_name().to_string_lossy().to_string();
-        let relative = skills_relative_root.join(&id);
-        let skill_dir = canonicalize_existing_path(&root.join(&relative))?;
-        if !skill_dir.starts_with(root) {
-            bail!("skill `{id}` escapes the package root");
+        let name = entry.file_name().to_string_lossy().to_string();
+        let relative = current_relative_dir.join(&name);
+        let skill_file = root.join(&relative).join("SKILL.md");
+        if skill_file.is_file() {
+            let skill_dir = canonicalize_existing_path(&root.join(&relative))?;
+            let relative_under_skills = relative
+                .strip_prefix(skills_relative_root)
+                .with_context(|| format!("failed to make {} relative", relative.display()))?;
+            let id = derive_file_entry_id(relative_under_skills)?;
+            if !skill_dir.starts_with(root) {
+                bail!("skill `{id}` escapes the package root");
+            }
+            validate_skill_directory(&skill_dir, &name)
+                .with_context(|| format!("skill `{id}` is invalid"))?;
+            skills.push(SkillEntry { id, path: relative });
+            found_skill = true;
+            continue;
         }
-        validate_skill_directory(&skill_dir, &id)
-            .with_context(|| format!("skill `{id}` is invalid"))?;
-        skills.push(SkillEntry { id, path: relative });
+
+        found_skill |= discover_skills_in_dir(root, skills_relative_root, &relative, skills)?;
     }
 
-    skills.sort_by(|left, right| left.id.cmp(&right.id));
-    Ok(skills)
+    Ok(found_skill)
 }
 
 fn discover_files(

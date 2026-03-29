@@ -1117,6 +1117,80 @@ fn add_dependency_accepts_repo_with_symlinked_submodule_skills() {
 }
 
 #[test]
+fn add_dependency_accepts_repo_with_nested_skill_directories() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    let repo = TempDir::new().unwrap();
+    write_file(
+        &repo.path().join("skills/operations-and-lifecycle/.gitkeep"),
+        "",
+    );
+    write_skill(
+        &repo
+            .path()
+            .join("skills/onboarding-and-migrations/molt-fetch"),
+        "Molt Fetch",
+    );
+    write_skill(
+        &repo
+            .path()
+            .join("skills/security-and-governance/configuring-audit-logging"),
+        "Audit Logging",
+    );
+    init_git_repo(repo.path());
+    rename_current_branch(repo.path(), "main");
+
+    add_dependency_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        &repo.path().to_string_lossy(),
+        None,
+        &Adapter::ALL,
+        &[],
+    )
+    .unwrap();
+
+    let alias = normalize_alias_from_url(&repo.path().to_string_lossy()).unwrap();
+    let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    let package = lockfile
+        .packages
+        .iter()
+        .find(|package| package.alias == alias)
+        .unwrap();
+    assert_eq!(
+        package.skills,
+        vec![
+            "onboarding-and-migrations__molt-fetch",
+            "security-and-governance__configuring-audit-logging",
+        ]
+    );
+
+    let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let package = resolution
+        .packages
+        .iter()
+        .find(|package| package.alias == alias)
+        .unwrap();
+    let molt_fetch_skill_id = namespaced_skill_id(package, "onboarding-and-migrations__molt-fetch");
+    let audit_logging_skill_id = namespaced_skill_id(
+        package,
+        "security-and-governance__configuring-audit-logging",
+    );
+
+    assert!(
+        temp.path()
+            .join(format!(".claude/skills/{molt_fetch_skill_id}/SKILL.md"))
+            .exists()
+    );
+    assert!(
+        temp.path()
+            .join(format!(".claude/skills/{audit_logging_skill_id}/SKILL.md"))
+            .exists()
+    );
+}
+
+#[test]
 fn add_dependency_accepts_manifest_only_wrapper_repo_and_syncs_transitive_git_plugins() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

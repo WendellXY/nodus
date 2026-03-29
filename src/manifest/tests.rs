@@ -1424,6 +1424,43 @@ fn accepts_skill_frontmatter_without_name_by_falling_back_to_folder_name() {
 }
 
 #[test]
+fn discovers_nested_skills_under_category_directories() {
+    let temp = TempDir::new().unwrap();
+    write_file(&temp.path().join("skills/operations/.gitkeep"), "");
+    write_file(
+        &temp.path().join("skills/onboarding/molt-fetch/SKILL.md"),
+        "---\nname: Molt Fetch\ndescription: Run molt fetch.\n---\n# Molt Fetch\n",
+    );
+    write_file(
+        &temp
+            .path()
+            .join("skills/security/configuring-audit-logging/SKILL.md"),
+        "---\nname: Audit Logging\ndescription: Configure audit logging.\n---\n# Audit Logging\n",
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+
+    assert_eq!(
+        loaded
+            .discovered
+            .skills
+            .iter()
+            .map(|skill| (skill.id.as_str(), skill.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "onboarding__molt-fetch",
+                Path::new("skills/onboarding/molt-fetch"),
+            ),
+            (
+                "security__configuring-audit-logging",
+                Path::new("skills/security/configuring-audit-logging"),
+            ),
+        ]
+    );
+}
+
+#[test]
 fn discovers_agents_rules_and_commands() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
