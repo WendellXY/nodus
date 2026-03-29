@@ -290,7 +290,8 @@ pub enum PackageRole {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct SkillFrontmatter {
-    pub(super) name: String,
+    #[serde(default)]
+    pub(super) name: Option<String>,
     pub(super) description: String,
 }
 

@@ -777,7 +777,8 @@ fn discover_skills(root: &Path, discovery_root: &Path) -> Result<Vec<SkillEntry>
         if !skill_dir.starts_with(root) {
             bail!("skill `{id}` escapes the package root");
         }
-        validate_skill_directory(&skill_dir).with_context(|| format!("skill `{id}` is invalid"))?;
+        validate_skill_directory(&skill_dir, &id)
+            .with_context(|| format!("skill `{id}` is invalid"))?;
         skills.push(SkillEntry { id, path: relative });
     }
 
@@ -872,13 +873,19 @@ fn derive_file_entry_id(relative: &Path) -> Result<String> {
     Ok(id)
 }
 
-fn validate_skill_directory(skill_dir: &Path) -> Result<()> {
+fn validate_skill_directory(skill_dir: &Path, fallback_name: &str) -> Result<()> {
     let skill_file = skill_dir.join("SKILL.md");
     let contents = fs::read_to_string(&skill_file)
         .with_context(|| format!("failed to read {}", skill_file.display()))?;
     let frontmatter = parse_skill_frontmatter(&contents)?;
-    if frontmatter.name.trim().is_empty() {
-        bail!("`SKILL.md` frontmatter field `name` must not be empty");
+    let resolved_name = frontmatter
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback_name);
+    if resolved_name.is_empty() {
+        bail!("skill directory name must not be empty");
     }
     if frontmatter.description.trim().is_empty() {
         bail!("`SKILL.md` frontmatter field `description` must not be empty");
@@ -933,7 +940,7 @@ fn parse_simple_frontmatter(yaml: &str) -> Result<SkillFrontmatter> {
     }
 
     Ok(SkillFrontmatter {
-        name: name.ok_or_else(|| anyhow!("missing `name` in frontmatter"))?,
+        name,
         description: description.ok_or_else(|| anyhow!("missing `description` in frontmatter"))?,
     })
 }

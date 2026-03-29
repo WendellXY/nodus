@@ -1358,6 +1358,19 @@ fn accepts_unquoted_description_with_colon() {
 }
 
 #[test]
+fn accepts_skill_frontmatter_without_name_by_falling_back_to_folder_name() {
+    let temp = TempDir::new().unwrap();
+    write_file(
+        &temp.path().join("skills/atomic-agents/SKILL.md"),
+        "---\ndescription: Use when a task involves atomic agents.\n---\n# Atomic Agents\n",
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+
+    assert_eq!(loaded.discovered.skills[0].id, "atomic-agents");
+}
+
+#[test]
 fn discovers_agents_rules_and_commands() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
