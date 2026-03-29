@@ -769,6 +769,20 @@ fn reads_claude_plugin_version_from_json() {
 }
 
 #[test]
+fn ignores_non_semver_claude_plugin_version_from_json() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_claude_plugin_json(temp.path(), "latest");
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.manifest.version.is_none());
+    assert_eq!(loaded.warnings.len(), 1);
+    assert!(loaded.warnings[0].contains("ignoring non-SemVer Claude plugin version `latest`"));
+    assert!(loaded.warnings[0].contains("claude-code.json"));
+}
+
+#[test]
 fn accepts_dependency_repo_with_only_modern_claude_plugin_metadata_and_flat_mcp_servers() {
     let temp = TempDir::new().unwrap();
     write_modern_claude_plugin_json(temp.path(), Some("2.34.0"));
@@ -804,6 +818,30 @@ fn accepts_dependency_repo_with_only_modern_claude_plugin_metadata_and_flat_mcp_
         )
     );
     assert!(package_files.contains(&temp.path().join(".mcp.json").canonicalize().unwrap()));
+}
+
+#[test]
+fn ignores_non_semver_modern_claude_plugin_version_in_metadata() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json(temp.path(), Some("latest"));
+    write_file(
+        &temp.path().join(".mcp.json"),
+        r#"{
+  "asana": {
+    "type": "sse",
+    "url": "https://mcp.asana.com/sse"
+  }
+}
+"#,
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.manifest.version.is_none());
+    assert_eq!(loaded.warnings.len(), 1);
+    assert!(loaded.warnings[0].contains("ignoring non-SemVer Claude plugin version `latest`"));
+    assert!(loaded.warnings[0].contains(".claude-plugin/plugin.json"));
+    assert!(loaded.manifest.mcp_servers.contains_key("asana"));
 }
 
 #[test]
@@ -883,6 +921,21 @@ fn reads_codex_plugin_version_and_mcp_servers_from_json() {
         )
     );
     assert!(package_files.contains(&temp.path().join(".mcp.json").canonicalize().unwrap()));
+}
+
+#[test]
+fn ignores_non_semver_codex_plugin_version_in_metadata() {
+    let temp = TempDir::new().unwrap();
+    write_codex_mcp_config(temp.path());
+    write_codex_plugin_json(temp.path(), "latest", Some("./.mcp.json"));
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.manifest.version.is_none());
+    assert_eq!(loaded.warnings.len(), 1);
+    assert!(loaded.warnings[0].contains("ignoring non-SemVer Codex plugin version `latest`"));
+    assert!(loaded.warnings[0].contains(".codex-plugin/plugin.json"));
+    assert!(loaded.manifest.mcp_servers.contains_key("figma"));
 }
 
 #[test]

@@ -85,7 +85,7 @@ pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
     import_codex_plugin_metadata(&mut loaded)?;
 
     if loaded.manifest.version.is_none() {
-        loaded.manifest.version = load_claude_plugin_version(&loaded.root)?;
+        loaded.manifest.version = load_claude_plugin_version(&loaded.root, &mut loaded.warnings)?;
     }
 
     loaded.validate(role)?;

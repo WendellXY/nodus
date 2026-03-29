@@ -481,15 +481,12 @@ pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Resu
     if loaded.manifest.version.is_none()
         && let Some(version) = metadata.version.as_deref()
     {
-        let version = version.trim();
-        if !version.is_empty() {
-            loaded.manifest.version = Some(Version::parse(version).with_context(|| {
-                format!(
-                    "failed to parse Claude plugin version `{version}` in {}",
-                    metadata_path.display()
-                )
-            })?);
-        }
+        loaded.manifest.version = parse_plugin_metadata_version(
+            version,
+            "Claude plugin",
+            &metadata_path,
+            &mut loaded.warnings,
+        );
     }
 
     loaded.extra_package_files.push(metadata_path);
@@ -550,15 +547,12 @@ pub(super) fn import_codex_plugin_metadata(loaded: &mut LoadedManifest) -> Resul
     if loaded.manifest.version.is_none()
         && let Some(version) = metadata.version.as_deref()
     {
-        let version = version.trim();
-        if !version.is_empty() {
-            loaded.manifest.version = Some(Version::parse(version).with_context(|| {
-                format!(
-                    "failed to parse Codex plugin version `{version}` in {}",
-                    metadata_path.display()
-                )
-            })?);
-        }
+        loaded.manifest.version = parse_plugin_metadata_version(
+            version,
+            "Codex plugin",
+            &metadata_path,
+            &mut loaded.warnings,
+        );
     }
 
     loaded.extra_package_files.push(metadata_path.clone());
@@ -1087,37 +1081,52 @@ pub fn normalize_dependency_alias(value: &str) -> Result<String> {
     Ok(alias)
 }
 
-pub(super) fn load_claude_plugin_version(root: &Path) -> Result<Option<Version>> {
-    for metadata_path in [
-        root.join(".claude-plugin").join("plugin.json"),
-        root.join("claude-code.json"),
-    ] {
-        if !metadata_path.exists() {
-            continue;
-        }
-
-        let contents = fs::read_to_string(&metadata_path)
-            .with_context(|| format!("failed to read {}", metadata_path.display()))?;
-        let metadata: ClaudePluginMetadata = serde_json::from_str(&contents)
-            .with_context(|| format!("failed to parse JSON in {}", metadata_path.display()))?;
-        let Some(version) = metadata.version else {
-            continue;
-        };
-
-        let version = version.trim();
-        if version.is_empty() {
-            continue;
-        }
-
-        return Ok(Some(Version::parse(version).with_context(|| {
-            format!(
-                "failed to parse Claude plugin version `{version}` in {}",
-                metadata_path.display()
-            )
-        })?));
+pub(super) fn load_claude_plugin_version(
+    root: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<Option<Version>> {
+    let metadata_path = root.join("claude-code.json");
+    if !metadata_path.exists() {
+        return Ok(None);
     }
 
-    Ok(None)
+    let contents = fs::read_to_string(&metadata_path)
+        .with_context(|| format!("failed to read {}", metadata_path.display()))?;
+    let metadata: ClaudePluginMetadata = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse JSON in {}", metadata_path.display()))?;
+    let Some(version) = metadata.version else {
+        return Ok(None);
+    };
+
+    Ok(parse_plugin_metadata_version(
+        &version,
+        "Claude plugin",
+        &metadata_path,
+        warnings,
+    ))
+}
+
+fn parse_plugin_metadata_version(
+    raw_version: &str,
+    plugin_kind: &str,
+    metadata_path: &Path,
+    warnings: &mut Vec<String>,
+) -> Option<Version> {
+    let version = raw_version.trim();
+    if version.is_empty() {
+        return None;
+    }
+
+    match Version::parse(version) {
+        Ok(version) => Some(version),
+        Err(_) => {
+            warnings.push(format!(
+                "ignoring non-SemVer {plugin_kind} version `{version}` in {}",
+                metadata_path.display()
+            ));
+            None
+        }
+    }
 }
 
 pub(super) fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
