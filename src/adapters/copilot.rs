@@ -109,18 +109,18 @@ pub(crate) fn rewrite_skill_name(contents: &[u8], skill_id: &str) -> Result<Vec<
     };
     let frontmatter_end = frontmatter_end + 1;
 
-    let Some(name_index) = lines
+    if let Some(name_index) = lines
         .iter()
         .take(frontmatter_end)
         .position(|line| trim_line_ending(line).trim_start().starts_with("name:"))
-    else {
-        bail!(
-            "GitHub Copilot skill {} is missing a frontmatter `name`",
-            skill_id
+    {
+        lines[name_index] = rewrite_frontmatter_name_line(&lines[name_index], skill_id);
+    } else {
+        lines.insert(
+            frontmatter_end,
+            inserted_frontmatter_name_line(&lines, frontmatter_end, skill_id),
         );
-    };
-
-    lines[name_index] = rewrite_frontmatter_name_line(&lines[name_index], skill_id);
+    }
     Ok(lines.concat().into_bytes())
 }
 
@@ -134,6 +134,34 @@ fn split_lines_preserving_endings(contents: &str) -> Vec<String> {
 
 fn trim_line_ending(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
+}
+
+fn inserted_frontmatter_name_line(lines: &[String], frontmatter_end: usize, name: &str) -> String {
+    format!(
+        "name: {name}{}",
+        preferred_line_ending(lines, frontmatter_end)
+    )
+}
+
+fn preferred_line_ending(lines: &[String], anchor: usize) -> &str {
+    line_ending(lines.get(anchor).map(String::as_str).unwrap_or_default())
+        .or_else(|| {
+            anchor
+                .checked_sub(1)
+                .and_then(|index| lines.get(index))
+                .and_then(|line| line_ending(line))
+        })
+        .unwrap_or("\n")
+}
+
+fn line_ending(line: &str) -> Option<&str> {
+    if line.ends_with("\r\n") {
+        Some("\r\n")
+    } else if line.ends_with('\n') {
+        Some("\n")
+    } else {
+        None
+    }
 }
 
 fn rewrite_frontmatter_name_line(line: &str, name: &str) -> String {
@@ -176,5 +204,15 @@ mod tests {
         assert!(rewritten.contains("name: review\r\n"));
         assert!(rewritten.contains("description: Example\r\n"));
         assert!(rewritten.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn inserts_missing_skill_name_into_frontmatter() {
+        let contents = b"---\ndescription: Example\n---\n# Review\n".as_slice();
+        let rewritten = rewrite_skill_name(contents, "review").unwrap();
+        let rewritten = String::from_utf8(rewritten).unwrap();
+
+        assert!(rewritten.contains("name: review\n"));
+        assert!(rewritten.contains("description: Example\n"));
     }
 }

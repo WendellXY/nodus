@@ -1351,6 +1351,7 @@ impl RelayTransform {
                         managed,
                         baseline_source,
                         managed_skill_id,
+                        artifact_id,
                         "OpenCode",
                     )
                 })
@@ -1363,6 +1364,7 @@ impl RelayTransform {
                         managed,
                         baseline_source,
                         managed_skill_id,
+                        artifact_id,
                         "GitHub Copilot",
                     )
                 })
@@ -1377,30 +1379,29 @@ fn restore_rewritten_skill_name(
     managed: &[u8],
     baseline_source: &[u8],
     managed_skill_id: &str,
+    artifact_id: &str,
     adapter_name: &str,
 ) -> Result<Vec<u8>> {
     let managed = String::from_utf8(managed.to_vec())
         .with_context(|| format!("{adapter_name} managed skills must be UTF-8"))?;
     let baseline_source = String::from_utf8(baseline_source.to_vec())
         .with_context(|| format!("{adapter_name} source skills must be UTF-8"))?;
-    let restored_name = extract_frontmatter_name(&baseline_source, adapter_name)?;
+    let restored_name = extract_frontmatter_name(&baseline_source, artifact_id, adapter_name)?;
     let mut lines = split_lines_preserving_endings(&managed);
-    let Some(index) = lines
-        .iter()
-        .position(|line| trim_line_ending(line).trim_start() == format!("name: {managed_skill_id}"))
-        .or_else(|| {
-            lines
-                .iter()
-                .position(|line| trim_line_ending(line).trim_start().starts_with("name:"))
-        })
-    else {
-        bail!("{adapter_name} managed skill is missing a frontmatter `name`");
-    };
-    lines[index] = rewrite_frontmatter_name_line(&lines[index], &restored_name);
+    rewrite_or_insert_skill_name(
+        &mut lines,
+        &restored_name,
+        Some(managed_skill_id),
+        adapter_name,
+    )?;
     Ok(lines.concat().into_bytes())
 }
 
-fn extract_frontmatter_name(contents: &str, adapter_name: &str) -> Result<String> {
+fn extract_frontmatter_name(
+    contents: &str,
+    fallback_name: &str,
+    adapter_name: &str,
+) -> Result<String> {
     let lines = contents.lines().collect::<Vec<_>>();
     if lines.first().copied() != Some("---") {
         bail!("{adapter_name} skill is missing YAML frontmatter");
@@ -1411,10 +1412,15 @@ fn extract_frontmatter_name(contents: &str, adapter_name: &str) -> Result<String
     let frontmatter_end = frontmatter_end + 1;
     for line in lines.iter().take(frontmatter_end) {
         if let Some(value) = line.trim_start().strip_prefix("name:") {
-            return Ok(value.trim().to_string());
+            let value = value.trim();
+            return Ok(if value.is_empty() {
+                fallback_name.to_string()
+            } else {
+                value.to_string()
+            });
         }
     }
-    bail!("{adapter_name} skill is missing a frontmatter `name`")
+    Ok(fallback_name.to_string())
 }
 
 fn restore_skill_name_without_baseline(
@@ -1425,13 +1431,7 @@ fn restore_skill_name_without_baseline(
     let managed = String::from_utf8(managed.to_vec())
         .with_context(|| format!("{adapter_name} managed skills must be UTF-8"))?;
     let mut lines = split_lines_preserving_endings(&managed);
-    let Some(index) = lines
-        .iter()
-        .position(|line| trim_line_ending(line).trim_start().starts_with("name:"))
-    else {
-        bail!("{adapter_name} managed skill is missing a frontmatter `name`");
-    };
-    lines[index] = rewrite_frontmatter_name_line(&lines[index], artifact_id);
+    rewrite_or_insert_skill_name(&mut lines, artifact_id, None, adapter_name)?;
     Ok(lines.concat().into_bytes())
 }
 
@@ -1445,6 +1445,80 @@ fn split_lines_preserving_endings(contents: &str) -> Vec<String> {
 
 fn trim_line_ending(line: &str) -> &str {
     line.trim_end_matches(['\r', '\n'])
+}
+
+fn rewrite_or_insert_skill_name(
+    lines: &mut Vec<String>,
+    name: &str,
+    managed_skill_id: Option<&str>,
+    adapter_name: &str,
+) -> Result<()> {
+    let frontmatter_end = frontmatter_end(lines, adapter_name)?;
+    let name_index = managed_skill_id
+        .and_then(|managed_skill_id| {
+            lines.iter().take(frontmatter_end).position(|line| {
+                trim_line_ending(line).trim_start() == format!("name: {managed_skill_id}")
+            })
+        })
+        .or_else(|| {
+            lines
+                .iter()
+                .take(frontmatter_end)
+                .position(|line| trim_line_ending(line).trim_start().starts_with("name:"))
+        });
+
+    if let Some(index) = name_index {
+        lines[index] = rewrite_frontmatter_name_line(&lines[index], name);
+    } else {
+        lines.insert(
+            frontmatter_end,
+            inserted_frontmatter_name_line(lines, frontmatter_end, name),
+        );
+    }
+
+    Ok(())
+}
+
+fn frontmatter_end(lines: &[String], adapter_name: &str) -> Result<usize> {
+    if lines.first().map(|line| trim_line_ending(line)) != Some("---") {
+        bail!("{adapter_name} skill is missing YAML frontmatter");
+    }
+    let Some(frontmatter_end) = lines
+        .iter()
+        .skip(1)
+        .position(|line| trim_line_ending(line) == "---")
+    else {
+        bail!("{adapter_name} skill is missing a closing frontmatter fence");
+    };
+    Ok(frontmatter_end + 1)
+}
+
+fn inserted_frontmatter_name_line(lines: &[String], frontmatter_end: usize, name: &str) -> String {
+    format!(
+        "name: {name}{}",
+        preferred_line_ending(lines, frontmatter_end)
+    )
+}
+
+fn preferred_line_ending(lines: &[String], anchor: usize) -> &str {
+    line_ending(lines.get(anchor).map(String::as_str).unwrap_or_default())
+        .or_else(|| {
+            anchor
+                .checked_sub(1)
+                .and_then(|index| lines.get(index))
+                .and_then(|line| line_ending(line))
+        })
+        .unwrap_or("\n")
+}
+
+fn line_ending(line: &str) -> Option<&str> {
+    if line.ends_with("\r\n") {
+        Some("\r\n")
+    } else if line.ends_with('\n') {
+        Some("\n")
+    } else {
+        None
+    }
 }
 
 fn rewrite_frontmatter_name_line(line: &str, name: &str) -> String {
@@ -3217,11 +3291,26 @@ tag = "v0.2.0"
         let baseline = b"---\r\nname: Review\r\ndescription: Example.\r\n---\r\n# Review\r\n";
 
         let restored =
-            restore_rewritten_skill_name(managed, baseline, "review_abcd12", "OpenCode").unwrap();
+            restore_rewritten_skill_name(managed, baseline, "review_abcd12", "review", "OpenCode")
+                .unwrap();
         let restored = String::from_utf8(restored).unwrap();
 
         assert!(restored.contains("name: Review\r\n"));
         assert!(restored.contains("description: Example.\r\n"));
         assert!(restored.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn restore_skill_name_falls_back_to_artifact_id_when_baseline_omits_name() {
+        let managed = b"---\nname: review_abcd12\ndescription: Example.\n---\n# Review\n";
+        let baseline = b"---\ndescription: Example.\n---\n# Review\n";
+
+        let restored =
+            restore_rewritten_skill_name(managed, baseline, "review_abcd12", "review", "OpenCode")
+                .unwrap();
+        let restored = String::from_utf8(restored).unwrap();
+
+        assert!(restored.contains("name: review\n"));
+        assert!(restored.contains("description: Example.\n"));
     }
 }
