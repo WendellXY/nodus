@@ -7,6 +7,7 @@
 # - `[adapters] enabled = [...]`
 # - one or more entries under `[dependencies]`
 # - optionally, local-only entries under `[dev-dependencies]`
+# - for multi-plugin repos, optionally a `[workspace]` section
 
 # Optional manifest version string for your package or workspace metadata.
 # Leave it out if you do not need it.
@@ -22,6 +23,7 @@ version = "0.1.0"
 # Optional additive package source roots relative to the repo root.
 # Each listed directory is scanned like another Nodus AI-plugin root and may
 # contain its own `skills/`, `agents/`, `rules/`, and `commands/` folders.
+# Do not combine `content_roots` with `[workspace]`; they model different shapes.
 content_roots = ["nodus-development"]
 
 # Optional opt-in for publishing this root project's discovered AI assets into
@@ -97,6 +99,10 @@ local_playbook = { path = "vendor/playbook" }
 # Common case: follow compatible release tags instead of pinning one exact tag.
 axiom = { github = "CharlesWiltgen/Axiom", version = "^2.34.0" }
 
+# Common case: consume a workspace dependency and explicitly enable members.
+# If `members` is omitted for a workspace dependency, no workspace members are enabled.
+marketplace = { github = "acme/marketplace", tag = "v1.2.3", members = ["axiom", "firebase"] }
+
 # Common case: keep a dependency declared but inactive for now.
 # Disabled dependencies stay in the manifest, but Nodus skips resolving,
 # syncing, and lockfile tracking until you re-enable them.
@@ -147,3 +153,31 @@ tooling = { path = "vendor/tooling", components = ["skills"] }
 # Uncomment only if you want compatible adapters to auto-run sync on startup.
 # Current manifest validation requires this to be `true` when set.
 # sync_on_startup = true
+
+# -----------------------------------------------------------------------------
+# Workspace example
+# -----------------------------------------------------------------------------
+#
+# Use `[workspace]` when one repo contains multiple plugin packages.
+# The workspace root is a wrapper package; each member path is a normal package.
+#
+# [workspace]
+# members = ["plugins/axiom", "plugins/firebase"]
+#
+# [workspace.package.axiom]
+# path = "plugins/axiom"
+# name = "Axiom"
+#
+# [workspace.package.axiom.codex]
+# category = "Productivity"
+# installation = "AVAILABLE"
+# authentication = "ON_INSTALL"
+#
+# [workspace.package.firebase]
+# path = "plugins/firebase"
+# name = "Firebase"
+#
+# [workspace.package.firebase.codex]
+# category = "Productivity"
+# installation = "AVAILABLE"
+# authentication = "ON_INSTALL"

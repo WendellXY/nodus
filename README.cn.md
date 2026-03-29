@@ -475,6 +475,54 @@ Nodus 会从这些约定路径里发现一个包的内容：
 - `managed_exports`：声明由包自己拥有的受管理文件或目录导出
 - `capabilities`：声明高权限或高敏感度行为
 
+单包仓库继续使用上面的包布局。多插件仓库现在可以在 `nodus.toml`
+里显式声明 workspace 根：
+
+```toml
+[workspace]
+members = ["plugins/axiom", "plugins/firebase"]
+
+[workspace.package.axiom]
+path = "plugins/axiom"
+name = "Axiom"
+
+[workspace.package.axiom.codex]
+category = "Productivity"
+installation = "AVAILABLE"
+authentication = "ON_INSTALL"
+
+[workspace.package.firebase]
+path = "plugins/firebase"
+name = "Firebase"
+
+[workspace.package.firebase.codex]
+category = "Productivity"
+installation = "AVAILABLE"
+authentication = "ON_INSTALL"
+```
+
+workspace 规则：
+
+- workspace 根是一个薄包装包，不会把所有成员合并成一个包
+- workspace 根目录下不能再直接放根级 `skills/`、`agents/`、`rules/`、`commands/`
+- 每个 workspace member 都是一个普通的 Nodus 包，根目录由它自己的 `path` 决定
+- 对 workspace 根执行 `nodus sync` 时，会生成 Claude 和 Codex 的 marketplace 文件
+- 现有的 `.claude-plugin/marketplace.json` 和 `.agents/plugins/marketplace.json` 包装仓库仍然兼容
+
+消费 workspace 依赖时，member 选择是显式的：
+
+```toml
+[dependencies]
+acme = { github = "org/acme-marketplace", tag = "v1.2.3", members = ["axiom", "firebase"] }
+```
+
+选择语义：
+
+- `members = [...]` 只启用列出的 workspace member
+- 如果省略 `members`，就表示不启用任何 workspace member
+- `nodus add <workspace-repo>` 会把所有可用 member 显式写进 `members = [...]`
+- `nodus add --dry-run` 会预览生成出来的依赖配置，以及每个 member 的启用状态
+
 如果某个包声明了 `high` 敏感度能力，安装或更新时需要显式允许：
 
 ```bash

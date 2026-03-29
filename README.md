@@ -407,6 +407,54 @@ Packages can also declare:
 - `managed_exports` to publish package-owned managed files or directories
 - `capabilities` for privileged behavior such as high-sensitivity actions
 
+Single-package repos keep using the package layout above. Multi-plugin repos can
+now use an explicit workspace root in `nodus.toml`:
+
+```toml
+[workspace]
+members = ["plugins/axiom", "plugins/firebase"]
+
+[workspace.package.axiom]
+path = "plugins/axiom"
+name = "Axiom"
+
+[workspace.package.axiom.codex]
+category = "Productivity"
+installation = "AVAILABLE"
+authentication = "ON_INSTALL"
+
+[workspace.package.firebase]
+path = "plugins/firebase"
+name = "Firebase"
+
+[workspace.package.firebase.codex]
+category = "Productivity"
+installation = "AVAILABLE"
+authentication = "ON_INSTALL"
+```
+
+Workspace rules:
+
+- the workspace root is a thin wrapper package, not a merged package
+- root-level `skills/`, `agents/`, `rules/`, and `commands/` are not allowed in a workspace root
+- each workspace member is a normal Nodus package rooted at its configured path
+- `nodus sync` for a workspace root emits native marketplace files for Claude and Codex
+- existing `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` wrapper repos are still supported for backward compatibility
+
+When you consume a workspace dependency, member selection is explicit:
+
+```toml
+[dependencies]
+acme = { github = "org/acme-marketplace", tag = "v1.2.3", members = ["axiom", "firebase"] }
+```
+
+Selection semantics:
+
+- `members = [...]` enables only the listed workspace members
+- if `members` is omitted, no workspace members are enabled
+- `nodus add <workspace-repo>` writes all available members explicitly into `members = [...]`
+- `nodus add --dry-run` previews the generated dependency entry and each member's enabled status
+
 If a package declares `high` sensitivity capabilities, install or update with:
 
 ```bash
