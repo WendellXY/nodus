@@ -15,7 +15,7 @@ use crate::adapters::{Adapters, ManagedFile, build_output_plan};
 use crate::execution::{ExecutionMode, PreviewChange};
 use crate::lockfile::{LOCKFILE_NAME, Lockfile};
 use crate::manifest::{LoadedManifest, load_root_from_dir};
-use crate::paths::display_path;
+use crate::paths::{display_path, strip_path_prefix};
 use crate::report::Reporter;
 use crate::resolver::runtime::resolve_project;
 use crate::selection::resolve_adapter_selection;
@@ -656,7 +656,7 @@ pub(super) fn recover_runtime_owned_paths(
 }
 
 fn is_runtime_managed_path(project_root: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(project_root) else {
+    let Some(relative) = strip_path_prefix(path, project_root) else {
         return false;
     };
     let mut components = relative.components();

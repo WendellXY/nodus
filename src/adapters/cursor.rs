@@ -7,6 +7,7 @@ use crate::adapters::{
     ArtifactKind, ManagedArtifactNames, ManagedFile, managed_artifact_path, managed_skill_root,
 };
 use crate::manifest::{FileEntry, SkillEntry};
+use crate::paths::strip_path_prefix;
 use crate::resolver::ResolvedPackage;
 
 pub fn skill_files(
@@ -81,9 +82,8 @@ fn copy_directory(
     for entry in walkdir::WalkDir::new(source_root) {
         let entry = entry?;
         if entry.file_type().is_file() {
-            let relative = entry
-                .path()
-                .strip_prefix(source_root)
+            let relative = entry.path();
+            let relative = strip_path_prefix(relative, source_root)
                 .with_context(|| format!("failed to make {} relative", entry.path().display()))?;
             files.push(ManagedFile {
                 path: target_root.join(relative),

@@ -8,6 +8,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::adapters::Adapter;
+use crate::paths::canonicalize_path;
 use crate::report::Reporter;
 
 fn write_file(path: &Path, contents: &str) {
@@ -818,7 +819,7 @@ fn accepts_dependency_repo_with_only_modern_claude_plugin_metadata_and_flat_mcp_
                 .unwrap()
         )
     );
-    assert!(package_files.contains(&temp.path().join(".mcp.json").canonicalize().unwrap()));
+    assert!(package_files.contains(&canonicalize_path(&temp.path().join(".mcp.json")).unwrap()));
 }
 
 #[test]
@@ -893,8 +894,11 @@ fn imports_modern_claude_plugin_wrapped_mcp_servers_and_normalizes_plugin_root_c
         ]
     );
     assert_eq!(
-        discord.cwd.as_ref().and_then(|cwd| cwd.canonicalize().ok()),
-        Some(loaded.root.canonicalize().unwrap())
+        discord
+            .cwd
+            .as_ref()
+            .and_then(|cwd| canonicalize_path(cwd).ok()),
+        Some(canonicalize_path(&loaded.root).unwrap())
     );
 }
 
@@ -958,7 +962,7 @@ fn reads_codex_plugin_version_and_mcp_servers_from_json() {
                 .unwrap()
         )
     );
-    assert!(package_files.contains(&temp.path().join(".mcp.json").canonicalize().unwrap()));
+    assert!(package_files.contains(&canonicalize_path(&temp.path().join(".mcp.json")).unwrap()));
 }
 
 #[test]

@@ -12,7 +12,7 @@ use super::discover::{
 };
 use super::*;
 use crate::adapters::Adapter;
-use crate::paths::display_path;
+use crate::paths::{display_path, strip_path_prefix};
 
 impl LoadedManifest {
     pub fn validate(&self, role: PackageRole) -> Result<()> {
@@ -895,7 +895,7 @@ impl PackageContents {
             let logical_root = package.root.join(&skill.path);
             let resolved_root = package.resolve_existing_path(&skill.path)?;
             for file in collect_files(&resolved_root)? {
-                let relative = file.strip_prefix(&resolved_root).with_context(|| {
+                let relative = strip_path_prefix(&file, &resolved_root).with_context(|| {
                     format!(
                         "failed to make {} relative to {}",
                         file.display(),

@@ -13,7 +13,7 @@ use super::types::{
 };
 use super::*;
 use crate::git::github_slug_from_url;
-use crate::paths::display_path;
+use crate::paths::{canonicalize_path, display_path, path_is_dir};
 
 pub(super) fn load_manifest_str(path: &Path, contents: &str) -> Result<(Manifest, Vec<String>)> {
     let raw_value: toml::Value = toml::from_str(contents)
@@ -825,7 +825,7 @@ fn discover_skills_in_dir(
         if should_ignore_discovery_entry(&path) {
             continue;
         }
-        if !path.is_dir() {
+        if !path_is_dir(&path) {
             bail!(
                 "`{}` entries must be directories",
                 skills_relative_root.display()
@@ -834,9 +834,9 @@ fn discover_skills_in_dir(
 
         let name = entry.file_name().to_string_lossy().to_string();
         let relative = current_relative_dir.join(&name);
-        let skill_file = root.join(&relative).join("SKILL.md");
+        let skill_file = path.join("SKILL.md");
         if skill_file.is_file() {
-            let skill_dir = canonicalize_existing_path(&root.join(&relative))?;
+            let skill_dir = canonicalize_existing_path(&path)?;
             let relative_under_skills = relative
                 .strip_prefix(skills_relative_root)
                 .with_context(|| format!("failed to make {} relative", relative.display()))?;
@@ -1207,7 +1207,7 @@ fn parse_plugin_metadata_version(
 }
 
 pub(super) fn canonicalize_existing_path(path: &Path) -> Result<PathBuf> {
-    dunce::canonicalize(path).with_context(|| format!("failed to canonicalize {}", path.display()))
+    canonicalize_path(path).with_context(|| format!("failed to canonicalize {}", path.display()))
 }
 
 pub(super) fn default_manifest_contents() -> &'static str {

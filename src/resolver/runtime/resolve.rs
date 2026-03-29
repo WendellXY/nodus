@@ -19,7 +19,7 @@ use crate::manifest::{
     DependencyComponent, DependencySourceKind, DependencySpec, LoadedManifest, ManagedExportSpec,
     ManagedPlacement, PackageRole, RequestedGitRef, load_dependency_from_dir, load_root_from_dir,
 };
-use crate::paths::display_path;
+use crate::paths::{canonicalize_path, display_path, strip_path_prefix};
 use crate::report::Reporter;
 
 #[derive(Debug, Default)]
@@ -59,23 +59,23 @@ pub(super) fn validate_git_package(package: &ResolvedPackage, cache_root: &Path)
     };
 
     let checkout_path = shared_checkout_path(cache_root, url, rev)?;
-    let canonical_checkout = checkout_path.canonicalize().with_context(|| {
+    let canonical_checkout = canonicalize_path(&checkout_path).with_context(|| {
         format!(
             "failed to canonicalize shared checkout {}",
             checkout_path.display()
         )
     })?;
     let expected_root = match subpath {
-        Some(subpath) => canonical_checkout
-            .join(subpath)
-            .canonicalize()
-            .with_context(|| {
+        Some(subpath) => {
+            let expected_root = canonical_checkout.join(subpath);
+            canonicalize_path(&expected_root).with_context(|| {
                 format!(
                     "failed to resolve git dependency subpath {}",
                     subpath.display()
                 )
-            })?,
-        None => checkout_path.clone(),
+            })?
+        }
+        None => canonical_checkout.clone(),
     };
     if package.root != expected_root {
         bail!(
@@ -110,8 +110,7 @@ pub(super) fn resolve_project(
     let project_root = if let Some(root_override) = root_override {
         root_override.root.clone()
     } else {
-        root.canonicalize()
-            .with_context(|| format!("failed to access {}", root.display()))?
+        canonicalize_path(root).with_context(|| format!("failed to access {}", root.display()))?
     };
     let context = ResolveContext {
         cache_root,
@@ -483,18 +482,18 @@ fn resolve_git_dependency_root(
     checkout_root: &Path,
     subpath: Option<&Path>,
 ) -> Result<PathBuf> {
-    let canonical_checkout = checkout_root.canonicalize().with_context(|| {
+    let canonical_checkout = canonicalize_path(checkout_root).with_context(|| {
         format!(
             "failed to canonicalize dependency `{alias}` checkout {}",
             checkout_root.display()
         )
     })?;
     let Some(subpath) = subpath else {
-        return Ok(checkout_root.to_path_buf());
+        return Ok(canonical_checkout);
     };
 
     let path = canonical_checkout.join(subpath);
-    let canonical = path.canonicalize().with_context(|| {
+    let canonical = canonicalize_path(&path).with_context(|| {
         format!(
             "failed to resolve dependency `{alias}` subpath {}",
             path.display()
@@ -833,9 +832,10 @@ fn resolve_managed_paths(
                 if !entry.file_type().is_file() {
                     continue;
                 }
-                let relative = entry.path().strip_prefix(&source_path).with_context(|| {
-                    format!("failed to make {} relative", entry.path().display())
-                })?;
+                let relative =
+                    strip_path_prefix(entry.path(), &source_path).with_context(|| {
+                        format!("failed to make {} relative", entry.path().display())
+                    })?;
                 let source_relative = source_root.join(relative);
                 let target_relative = target_root.join(relative);
                 if !concrete_targets.insert(target_relative.clone()) {
@@ -844,7 +844,7 @@ fn resolve_managed_paths(
                         target_relative.display()
                     );
                 }
-                extra_package_files.push(entry.path().canonicalize().with_context(|| {
+                extra_package_files.push(canonicalize_path(entry.path()).with_context(|| {
                     format!("failed to canonicalize {}", entry.path().display())
                 })?);
                 files.push(ResolvedManagedFile {
@@ -898,12 +898,10 @@ fn resolve_dependency_managed_source_path(
     dependency_root: &Path,
     source_root: &Path,
 ) -> Result<PathBuf> {
-    let canonical_dependency_root = dependency_root
-        .canonicalize()
+    let canonical_dependency_root = canonicalize_path(dependency_root)
         .with_context(|| format!("failed to access {}", dependency_root.display()))?;
     let source_path = dependency_root.join(source_root);
-    let canonical = source_path
-        .canonicalize()
+    let canonical = canonicalize_path(&source_path)
         .with_context(|| format!("missing managed source {}", source_path.display()))?;
     if !canonical.starts_with(&canonical_dependency_root) {
         bail!(
@@ -990,8 +988,7 @@ fn compute_package_digest(
     let file_payloads = files
         .par_iter()
         .map(|file| {
-            let relative = file
-                .strip_prefix(&manifest.root)
+            let relative = strip_path_prefix(file, &manifest.root)
                 .with_context(|| format!("failed to make {} relative", file.display()))?
                 .to_path_buf();
             let contents = manifest

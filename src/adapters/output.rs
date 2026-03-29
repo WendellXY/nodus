@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::{Adapter, Adapters, ArtifactKind, ManagedArtifactNames, ManagedFile};
 use crate::lockfile::{Lockfile, managed_mcp_server_name};
 use crate::manifest::{DependencyComponent, McpServerConfig};
-use crate::paths::display_path;
+use crate::paths::{display_path, strip_path_prefix};
 use crate::resolver::{PackageSource, ResolvedPackage};
 
 #[derive(Debug, Default)]
@@ -656,8 +656,7 @@ fn emitted_mcp_server(server: &McpServerConfig) -> EmittedMcpServerConfig {
 }
 
 fn gitignore_entry(project_root: &Path, path: &Path) -> Result<Option<(PathBuf, String)>> {
-    let relative = path
-        .strip_prefix(project_root)
+    let relative = strip_path_prefix(path, project_root)
         .with_context(|| format!("failed to make {} relative", path.display()))?;
     let components = relative
         .iter()
@@ -690,8 +689,7 @@ fn gitignore_entry(project_root: &Path, path: &Path) -> Result<Option<(PathBuf, 
 }
 
 fn runtime_root_gitignore(project_root: &Path, path: &Path) -> Result<Option<PathBuf>> {
-    let relative = path
-        .strip_prefix(project_root)
+    let relative = strip_path_prefix(path, project_root)
         .with_context(|| format!("failed to make {} relative", path.display()))?;
     let components = relative
         .iter()
@@ -812,10 +810,7 @@ fn sync_on_startup_files(
 }
 
 fn display_relative(project_root: &Path, path: &Path) -> String {
-    path.strip_prefix(project_root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    display_path(strip_path_prefix(path, project_root).unwrap_or(path))
 }
 
 fn validate_direct_managed_root(

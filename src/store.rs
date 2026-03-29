@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use tempfile::{Builder, NamedTempFile};
 
+use crate::paths::strip_path_prefix;
+
 pub const STORE_ROOT: &str = "store/sha256";
 
 #[derive(Debug, Clone)]
@@ -113,7 +115,7 @@ fn snapshot_package<T: SnapshotSource>(store_root: &Path, package: &T) -> Result
     let staging_root = staging.path().to_path_buf();
 
     for file in files {
-        let relative = file.strip_prefix(package.package_root()).with_context(|| {
+        let relative = strip_path_prefix(&file, package.package_root()).with_context(|| {
             format!("failed to make {} relative to package root", file.display())
         })?;
         let target = staging_root.join(relative);

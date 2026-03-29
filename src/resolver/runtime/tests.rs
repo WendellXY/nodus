@@ -17,7 +17,7 @@ use crate::install_paths::InstallPaths;
 use crate::manifest::{
     DependencyComponent, DependencyKind, MANIFEST_FILE, RequestedGitRef, load_root_from_dir,
 };
-use crate::paths::display_path;
+use crate::paths::{canonicalize_path, display_path};
 use crate::report::{ColorMode, Reporter};
 
 fn write_file(path: &Path, contents: &str) {
@@ -606,7 +606,7 @@ fn git_output(path: &Path, args: &[&str]) -> String {
 }
 
 fn canonicalize_git_path_output(path: String) -> PathBuf {
-    PathBuf::from(path).canonicalize().unwrap()
+    canonicalize_path(&PathBuf::from(path)).unwrap()
 }
 
 fn toml_path_value(path: &Path) -> String {
@@ -722,7 +722,7 @@ fn add_dependency_clones_repo_and_updates_manifest() {
             &checkout_path,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"]
         )),
-        mirror_path.canonicalize().unwrap()
+        canonicalize_path(&mirror_path).unwrap()
     );
     let manifest = fs::read_to_string(temp.path().join(MANIFEST_FILE)).unwrap();
     assert!(manifest.contains("[dependencies]"));
@@ -2142,7 +2142,7 @@ fn add_dependency_accepts_modern_claude_mcp_only_package_and_syncs_mcp_metadata(
     )
     .canonicalize()
     .unwrap();
-    assert_eq!(emitted_cwd, package.root.canonicalize().unwrap());
+    assert_eq!(emitted_cwd, canonicalize_path(&package.root).unwrap());
     assert_eq!(
         json["mcpServers"][format!("{alias}__discord")]["args"],
         serde_json::json!(["run", "--shell=bun", "--silent", "start"])
@@ -2198,8 +2198,8 @@ fn add_dependency_normalizes_claude_plugin_root_arg_paths_in_mcp_metadata() {
     assert_eq!(args[0].as_str(), Some("--tools-file"));
     assert_eq!(args[2].as_str(), Some("--stdio"));
     assert_eq!(
-        Path::new(args[1].as_str().unwrap()).canonicalize().unwrap(),
-        package.root.join("tools.yaml").canonicalize().unwrap()
+        canonicalize_path(Path::new(args[1].as_str().unwrap())).unwrap(),
+        canonicalize_path(&package.root.join("tools.yaml")).unwrap()
     );
 }
 
@@ -5708,12 +5708,13 @@ fn shared_cache_is_reused_across_multiple_projects() {
             &checkout_path,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"]
         )),
-        mirror_path.canonicalize().unwrap()
+        canonicalize_path(&mirror_path).unwrap()
     );
     let resolution_one =
         resolve_project(project_one.path(), cache.path(), ResolveMode::Sync).unwrap();
     let resolution_two =
         resolve_project(project_two.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let canonical_checkout_path = canonicalize_path(&checkout_path).unwrap();
     assert_eq!(
         resolution_one
             .packages
@@ -5721,7 +5722,7 @@ fn shared_cache_is_reused_across_multiple_projects() {
             .find(|package| matches!(package.source, PackageSource::Git { .. }))
             .unwrap()
             .root,
-        checkout_path
+        canonical_checkout_path
     );
     assert_eq!(
         resolution_two
@@ -5730,7 +5731,7 @@ fn shared_cache_is_reused_across_multiple_projects() {
             .find(|package| matches!(package.source, PackageSource::Git { .. }))
             .unwrap()
             .root,
-        checkout_path
+        canonical_checkout_path
     );
 }
 

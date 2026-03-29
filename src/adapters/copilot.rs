@@ -8,6 +8,7 @@ use crate::adapters::{
     managed_skill_root,
 };
 use crate::manifest::{FileEntry, SkillEntry};
+use crate::paths::strip_path_prefix;
 use crate::resolver::ResolvedPackage;
 
 pub fn skill_files(
@@ -31,9 +32,8 @@ pub fn skill_files(
     for entry in walkdir::WalkDir::new(&source_root) {
         let entry = entry?;
         if entry.file_type().is_file() {
-            let relative = entry
-                .path()
-                .strip_prefix(&source_root)
+            let relative = entry.path();
+            let relative = strip_path_prefix(relative, &source_root)
                 .with_context(|| format!("failed to make {} relative", entry.path().display()))?;
             let contents = fs::read(entry.path()).with_context(|| {
                 format!("failed to read snapshot file {}", entry.path().display())

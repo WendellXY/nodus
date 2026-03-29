@@ -24,6 +24,7 @@ use crate::git::{
 use crate::local_config::{LocalConfig, RelayLink, RelayedFileState, config_path, local_dir};
 use crate::lockfile::{LOCKFILE_NAME, Lockfile};
 use crate::manifest::{DependencySourceKind, SkillEntry, load_root_from_dir};
+use crate::paths::{canonicalize_path, display_path, strip_path_prefix};
 use crate::report::Reporter;
 use crate::resolver::{
     PackageSource, ResolvedPackage, resolve_project_from_existing_lockfile_in_dir,
@@ -1238,9 +1239,7 @@ fn skill_mappings(
         if !entry.file_type().is_file() {
             continue;
         }
-        let relative = entry
-            .path()
-            .strip_prefix(source_root)
+        let relative = strip_path_prefix(entry.path(), source_root)
             .with_context(|| format!("failed to make {} relative", entry.path().display()))?;
         let transform = if relative == Path::new("SKILL.md") {
             match adapter {
@@ -1280,9 +1279,7 @@ fn missing_skill_mappings(
         if !entry.file_type().is_file() {
             continue;
         }
-        let relative = entry
-            .path()
-            .strip_prefix(managed_root)
+        let relative = strip_path_prefix(entry.path(), managed_root)
             .with_context(|| format!("failed to make {} relative", entry.path().display()))?;
         let transform = if relative == Path::new("SKILL.md") {
             match adapter {
@@ -1538,9 +1535,8 @@ fn rewrite_frontmatter_name_line(line: &str, name: &str) -> String {
 }
 
 fn canonicalize_existing_dir(path: &Path) -> Result<PathBuf> {
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("failed to access {}", path.display()))?;
+    let canonical =
+        canonicalize_path(path).with_context(|| format!("failed to access {}", path.display()))?;
     if !canonical.is_dir() {
         bail!("{} is not a directory", canonical.display());
     }
@@ -1548,10 +1544,7 @@ fn canonicalize_existing_dir(path: &Path) -> Result<PathBuf> {
 }
 
 fn display_relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    display_path(strip_path_prefix(path, root).unwrap_or(path))
 }
 
 #[cfg(test)]
@@ -1948,7 +1941,7 @@ mod tests {
 
         let local_config = LocalConfig::load_in_dir(project.path()).unwrap();
         let link = local_config.relay_link("playbook_ios").unwrap();
-        assert_eq!(link.repo_path, linked_repo.canonicalize().unwrap());
+        assert_eq!(link.repo_path, canonicalize_path(&linked_repo).unwrap());
         assert_eq!(link.via, None);
     }
 
@@ -2127,7 +2120,7 @@ mod tests {
 
         let local_config = LocalConfig::load_in_dir(project.path()).unwrap();
         let link = local_config.relay_link("playbook_ios").unwrap();
-        assert_eq!(link.repo_path, linked_repo.canonicalize().unwrap());
+        assert_eq!(link.repo_path, canonicalize_path(&linked_repo).unwrap());
         assert_eq!(link.via, Some(Adapter::Claude));
     }
 
