@@ -13,6 +13,7 @@ use super::types::{
 };
 use super::*;
 use crate::git::github_slug_from_url;
+use crate::paths::display_path;
 
 pub(super) fn load_manifest_str(path: &Path, contents: &str) -> Result<(Manifest, Vec<String>)> {
     let raw_value: toml::Value = toml::from_str(contents)
@@ -143,6 +144,7 @@ pub(super) fn load_claude_marketplace_wrapper(
                             name,
                             mcp_servers,
                             &marketplace_path,
+                            &loaded.root,
                         )?;
                     } else if !loaded
                         .root
@@ -443,6 +445,7 @@ fn import_marketplace_mcp_servers(
     plugin_name: &str,
     mcp_servers: ClaudeMarketplaceMcpServers,
     marketplace_path: &Path,
+    plugin_root: &Path,
 ) -> Result<()> {
     let servers = match mcp_servers {
         ClaudeMarketplaceMcpServers::Inline(servers) => servers,
@@ -454,9 +457,15 @@ fn import_marketplace_mcp_servers(
         }
     };
 
+    let mut normalized_servers = BTreeMap::new();
+    for (server_id, server) in servers {
+        let server = normalize_claude_plugin_mcp_server(server, plugin_root);
+        normalized_servers.insert(server_id, server);
+    }
+
     insert_mcp_servers(
         manifest,
-        servers,
+        normalized_servers,
         &format!(
             "{} plugin `{plugin_name}` MCP configuration",
             marketplace_path.display()
@@ -515,7 +524,7 @@ pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Resu
 
     let mut normalized_servers = BTreeMap::new();
     for (server_id, server) in servers {
-        let server = normalize_claude_plugin_mcp_server(server);
+        let server = normalize_claude_plugin_mcp_server(server, &loaded.root);
         normalized_servers.insert(server_id, server);
     }
     insert_mcp_servers(
@@ -579,9 +588,14 @@ pub(super) fn import_codex_plugin_metadata(loaded: &mut LoadedManifest) -> Resul
         .with_context(|| format!("failed to read {}", config_path.display()))?;
     let config: CodexPluginMcpConfig = serde_json::from_str(&contents)
         .with_context(|| format!("failed to parse JSON in {}", config_path.display()))?;
+    let mut normalized_servers = BTreeMap::new();
+    for (server_id, server) in config.mcp_servers {
+        let server = normalize_claude_plugin_mcp_server(server, &loaded.root);
+        normalized_servers.insert(server_id, server);
+    }
     insert_mcp_servers(
         &mut loaded.manifest,
-        config.mcp_servers,
+        normalized_servers,
         &config_path.display().to_string(),
     )?;
 
@@ -610,7 +624,33 @@ fn insert_mcp_servers(
     Ok(())
 }
 
-fn normalize_claude_plugin_mcp_server(mut server: McpServerConfig) -> McpServerConfig {
+fn normalize_claude_plugin_root_arg(value: &str, plugin_root: &Path) -> String {
+    if value == "${CLAUDE_PLUGIN_ROOT}" {
+        return display_path(plugin_root);
+    }
+    if let Some(suffix) = value.strip_prefix("${CLAUDE_PLUGIN_ROOT}/") {
+        return display_path(&plugin_root.join(suffix));
+    }
+
+    value.to_string()
+}
+
+fn normalize_claude_plugin_root_cwd(cwd: &Path, plugin_root: &Path) -> PathBuf {
+    let cwd_display = display_path(cwd);
+    if cwd_display == "${CLAUDE_PLUGIN_ROOT}" {
+        return plugin_root.to_path_buf();
+    }
+    if let Some(suffix) = cwd_display.strip_prefix("${CLAUDE_PLUGIN_ROOT}/") {
+        return plugin_root.join(suffix);
+    }
+
+    cwd.to_path_buf()
+}
+
+fn normalize_claude_plugin_mcp_server(
+    mut server: McpServerConfig,
+    plugin_root: &Path,
+) -> McpServerConfig {
     let mut normalized_args = Vec::with_capacity(server.args.len());
     let mut index = 0;
     while index < server.args.len() {
@@ -620,15 +660,21 @@ fn normalize_claude_plugin_mcp_server(mut server: McpServerConfig) -> McpServerC
                 .get(index + 1)
                 .is_some_and(|value| value == "${CLAUDE_PLUGIN_ROOT}")
         {
-            server.cwd.get_or_insert_with(|| PathBuf::from("."));
+            server.cwd.get_or_insert_with(|| plugin_root.to_path_buf());
             index += 2;
             continue;
         }
 
-        normalized_args.push(server.args[index].clone());
+        normalized_args.push(normalize_claude_plugin_root_arg(
+            &server.args[index],
+            plugin_root,
+        ));
         index += 1;
     }
     server.args = normalized_args;
+    if let Some(cwd) = &server.cwd {
+        server.cwd = Some(normalize_claude_plugin_root_cwd(cwd, plugin_root));
+    }
     server
 }
 

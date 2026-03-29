@@ -630,6 +630,7 @@ fn accepts_marketplace_plugin_that_points_at_root_claude_plugin_metadata() {
 }
 "#,
     );
+    write_file(&temp.path().join("tools.yaml"), "version: v1\n");
 
     let loaded = load_dependency_from_dir(temp.path()).unwrap();
 
@@ -891,7 +892,44 @@ fn imports_modern_claude_plugin_wrapped_mcp_servers_and_normalizes_plugin_root_c
             String::from("start"),
         ]
     );
-    assert_eq!(discord.cwd.as_deref(), Some(Path::new(".")));
+    assert_eq!(
+        discord.cwd.as_ref().and_then(|cwd| cwd.canonicalize().ok()),
+        Some(loaded.root.canonicalize().unwrap())
+    );
+}
+
+#[test]
+fn normalizes_claude_plugin_root_arg_paths_in_mcp_config() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json(temp.path(), Some("2.34.0"));
+    write_file(
+        &temp.path().join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "cockroachdb-toolbox": {
+      "command": "toolbox",
+      "args": ["--tools-file", "${CLAUDE_PLUGIN_ROOT}/tools.yaml", "--stdio"]
+    }
+  }
+}
+"#,
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+    let server = loaded
+        .manifest
+        .mcp_servers
+        .get("cockroachdb-toolbox")
+        .unwrap();
+    assert_eq!(server.command.as_deref(), Some("toolbox"));
+    assert_eq!(
+        server.args[..2].to_vec(),
+        vec![String::from("--tools-file"), server.args[1].clone()]
+    );
+    assert_eq!(server.args[2], String::from("--stdio"));
+    assert!(!server.args[1].contains("${CLAUDE_PLUGIN_ROOT}"));
+    assert!(Path::new(&server.args[1]).is_absolute());
+    assert!(server.args[1].ends_with("/tools.yaml"));
 }
 
 #[test]

@@ -17,6 +17,7 @@ use crate::install_paths::InstallPaths;
 use crate::manifest::{
     DependencyComponent, DependencyKind, MANIFEST_FILE, RequestedGitRef, load_root_from_dir,
 };
+use crate::paths::display_path;
 use crate::report::{ColorMode, Reporter};
 
 fn write_file(path: &Path, contents: &str) {
@@ -2128,13 +2129,77 @@ fn add_dependency_accepts_modern_claude_mcp_only_package_and_syncs_mcp_metadata(
         json["mcpServers"][format!("{alias}__discord")]["command"].as_str(),
         Some("bun")
     );
-    assert_eq!(
-        json["mcpServers"][format!("{alias}__discord")]["cwd"].as_str(),
-        Some(".")
-    );
+    let package = resolve_project(temp.path(), cache.path(), ResolveMode::Sync)
+        .unwrap()
+        .packages
+        .into_iter()
+        .find(|package| package.alias == alias)
+        .unwrap();
+    let emitted_cwd = Path::new(
+        json["mcpServers"][format!("{alias}__discord")]["cwd"]
+            .as_str()
+            .unwrap(),
+    )
+    .canonicalize()
+    .unwrap();
+    assert_eq!(emitted_cwd, package.root.canonicalize().unwrap());
     assert_eq!(
         json["mcpServers"][format!("{alias}__discord")]["args"],
         serde_json::json!(["run", "--shell=bun", "--silent", "start"])
+    );
+}
+
+#[test]
+fn add_dependency_normalizes_claude_plugin_root_arg_paths_in_mcp_metadata() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    let plugin = TempDir::new().unwrap();
+    write_modern_claude_plugin_json(plugin.path(), "0.1.1");
+    write_file(
+        &plugin.path().join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "cockroachdb-toolbox": {
+      "command": "toolbox",
+      "args": ["--tools-file", "${CLAUDE_PLUGIN_ROOT}/tools.yaml", "--stdio"]
+    }
+  }
+}
+"#,
+    );
+    write_file(&plugin.path().join("tools.yaml"), "version: v1\n");
+    init_git_repo(plugin.path());
+    rename_current_branch(plugin.path(), "main");
+
+    add_dependency_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        &plugin.path().to_string_lossy(),
+        None,
+        &[Adapter::Codex],
+        &[],
+    )
+    .unwrap();
+
+    let alias = normalize_alias_from_url(&plugin.path().to_string_lossy()).unwrap();
+    let package = resolve_project(temp.path(), cache.path(), ResolveMode::Sync)
+        .unwrap()
+        .packages
+        .into_iter()
+        .find(|package| package.alias == alias)
+        .unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".mcp.json")).unwrap()).unwrap();
+    let args = json["mcpServers"][format!("{alias}__cockroachdb-toolbox")]["args"]
+        .as_array()
+        .unwrap();
+    assert_eq!(args[0].as_str(), Some("--tools-file"));
+    assert_eq!(args[2].as_str(), Some("--stdio"));
+    assert_eq!(
+        Path::new(args[1].as_str().unwrap()).canonicalize().unwrap(),
+        package.root.join("tools.yaml").canonicalize().unwrap()
     );
 }
 
