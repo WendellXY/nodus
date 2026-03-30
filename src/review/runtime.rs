@@ -990,7 +990,7 @@ mod tests {
         let prompt = build_review_prompt(&scope);
 
         assert!(prompt.contains("Allowed review roots:"));
-        assert!(prompt.contains(&display_path(&root)));
+        assert!(prompt.contains(&display_path(&scope.target().root)));
         assert!(prompt.contains("Respond with these sections:"));
     }
 
