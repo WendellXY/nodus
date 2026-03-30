@@ -983,7 +983,14 @@ fn ensure_shared_checkout(
 
 fn configure_checkout_behavior(path: &Path) -> Result<()> {
     git_run(path, ["config", "core.autocrlf", "false"])?;
-    git_run(path, ["config", "core.symlinks", "true"])?;
+    git_run(
+        path,
+        [
+            "config",
+            "core.symlinks",
+            if cfg!(windows) { "false" } else { "true" },
+        ],
+    )?;
     Ok(())
 }
 
@@ -1593,11 +1600,24 @@ mod tests {
             ensure_git_dependency(cache_root.path(), &url, None, true, &reporter).unwrap();
 
         assert_eq!(recovered.path, checkout.path);
+        let recovered_manifest = load_dependency_from_dir(&recovered.path).unwrap();
+        assert_eq!(
+            recovered_manifest
+                .discovered
+                .skills
+                .iter()
+                .map(|skill| skill.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["review"]
+        );
         assert_eq!(
             git_output(&recovered.path, ["config", "--get", "core.symlinks"]).unwrap(),
-            "true"
+            if cfg!(windows) { "false" } else { "true" }
         );
-        assert!(recovered.path.join("skills/review").is_dir());
+        assert_eq!(
+            recovered.path.join("skills/review").is_dir(),
+            !cfg!(windows)
+        );
     }
 
     #[test]
@@ -1640,7 +1660,8 @@ mod tests {
         let checkout =
             ensure_git_dependency(cache_root.path(), &url, None, true, &reporter).unwrap();
 
-        assert!(load_dependency_from_dir(&checkout.path).is_ok());
+        let initial = load_dependency_from_dir(&checkout.path);
+        assert!(initial.is_ok(), "{initial:?}");
 
         fs::remove_dir_all(checkout.path.join("vendor/shared/skills/review")).unwrap();
         assert!(load_dependency_from_dir(&checkout.path).is_err());
