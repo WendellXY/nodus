@@ -145,7 +145,8 @@ impl LoadedManifest {
             return Ok(contents.clone());
         }
 
-        fs::read(path).with_context(|| format!("failed to read {}", path.display()))
+        let resolved = self.resolve_package_file_path(path)?;
+        fs::read(&resolved).with_context(|| format!("failed to read {}", path.display()))
     }
 
     pub fn resolve_path(&self, value: &Path) -> Result<PathBuf> {
@@ -161,6 +162,41 @@ impl LoadedManifest {
 
     pub fn effective_version(&self) -> Option<Version> {
         self.manifest.version.clone()
+    }
+
+    fn resolve_package_file_path(&self, path: &Path) -> Result<PathBuf> {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        };
+        if absolute.is_file() {
+            return Ok(absolute);
+        }
+        if !absolute.starts_with(&self.root) {
+            return Ok(absolute);
+        }
+
+        for ancestor in absolute.ancestors().skip(1) {
+            if !ancestor.starts_with(&self.root) {
+                continue;
+            }
+            let Some(relative_ancestor) = strip_path_prefix(ancestor, &self.root) else {
+                continue;
+            };
+            let Some(relative_suffix) = strip_path_prefix(&absolute, ancestor) else {
+                continue;
+            };
+            let Ok(resolved_dir) = self.resolve_existing_directory(relative_ancestor) else {
+                continue;
+            };
+            let candidate = resolved_dir.join(relative_suffix);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+
+        Ok(absolute)
     }
 
     pub fn resolved_workspace_members(&self) -> Result<Vec<ResolvedWorkspaceMember>> {

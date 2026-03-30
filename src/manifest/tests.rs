@@ -464,6 +464,12 @@ fn discovers_symlinked_skill_directories_inside_package_root() {
             .any(|path| path.ends_with(Path::new("skills/review/SKILL.md"))),
         "{package_files:?}"
     );
+    let skill_file = package_files
+        .iter()
+        .find(|path| path.ends_with(Path::new("skills/review/SKILL.md")))
+        .unwrap();
+    let contents = String::from_utf8(loaded.read_package_file(skill_file).unwrap()).unwrap();
+    assert!(contents.contains("name: Review"));
 }
 
 #[test]

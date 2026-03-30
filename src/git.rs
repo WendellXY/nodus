@@ -1589,7 +1589,7 @@ mod tests {
         let checkout =
             ensure_git_dependency(cache_root.path(), &url, None, true, &reporter).unwrap();
 
-        assert!(checkout.path.join("skills/review").is_dir());
+        assert_eq!(checkout.path.join("skills/review").is_dir(), !cfg!(windows));
 
         remove_symlink_path(&checkout.path.join("skills/review"));
         write_file(&checkout.path.join("skills/review"), "../vendor/review");
