@@ -149,10 +149,6 @@ pub fn review_package_in_dir(
     request: ReviewRequest<'_>,
     reporter: &Reporter,
 ) -> Result<ReviewSummary> {
-    if !cfg!(any(target_os = "macos", target_os = "linux")) {
-        bail!("`nodus review` is currently supported only on macOS and Linux");
-    }
-
     reporter.status(
         "Collecting",
         format!("package graph for {}", request.package),
@@ -284,7 +280,7 @@ async fn execute_review_with_runtime(
             tasks_dir: session.tasks_dir.clone(),
             ..TaskConfig::default()
         },
-        context_compaction: ContextCompactionConfig {
+        compaction: ContextCompactionConfig {
             transcript_dir: session.transcript_dir.clone(),
             ..ContextCompactionConfig::default()
         },
@@ -1011,6 +1007,8 @@ mod tests {
                 capabilities: Vec::new(),
                 side_effect_level: mentra::tool::ToolSideEffectLevel::None,
                 durability: mentra::tool::ToolDurability::Ephemeral,
+                execution_category: mentra::tool::ToolExecutionCategory::ReadOnlyParallel,
+                approval_category: mentra::tool::ToolApprovalCategory::ReadOnly,
                 raw_input: json!({}),
                 structured_input: json!({
                     "operations": [
