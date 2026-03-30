@@ -26,12 +26,7 @@ fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
-    let resolved_target = if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        link.parent().unwrap_or_else(|| Path::new(".")).join(target)
-    };
-    std::os::windows::fs::symlink_dir(&resolved_target, link)
+    std::os::windows::fs::symlink_dir(target, link)
 }
 
 fn create_directory_symlink(target: &Path, link: &Path) -> bool {
