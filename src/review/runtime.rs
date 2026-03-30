@@ -23,6 +23,7 @@ use crate::manifest::{
     DependencyComponent, DependencyKind, DependencySpec, LoadedManifest, PackageRole,
     RequestedGitRef as ManifestRequestedGitRef, normalize_dependency_alias,
 };
+use crate::paths::display_path;
 use crate::report::Reporter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -545,7 +546,7 @@ impl ReviewDependency {
 impl ReviewSource {
     fn describe(&self) -> String {
         match self {
-            Self::Path { path } => format!("path {}", path.display()),
+            Self::Path { path } => format!("path {}", display_path(path)),
             Self::Git {
                 url,
                 tag,
@@ -598,10 +599,10 @@ fn build_review_prompt(scope: &ReviewScope) -> String {
     );
     let _ = writeln!(prompt);
     let _ = writeln!(prompt, "Target package: {}", target.primary_alias());
-    let _ = writeln!(prompt, "Target root: {}", target.root.display());
+    let _ = writeln!(prompt, "Target root: {}", display_path(&target.root));
     let _ = writeln!(prompt, "Allowed review roots:");
     for root in scope.allowed_read_roots() {
-        let _ = writeln!(prompt, "- {}", root.display());
+        let _ = writeln!(prompt, "- {}", display_path(&root));
     }
 
     let _ = writeln!(prompt);
@@ -641,7 +642,7 @@ fn build_review_prompt(scope: &ReviewScope) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        let _ = writeln!(prompt, "root = {}", package.root.display());
+        let _ = writeln!(prompt, "root = {}", display_path(&package.root));
         let _ = writeln!(prompt, "source = {}", package.source.describe());
         if let Some(components) = &package.selected_components {
             let _ = writeln!(
@@ -757,7 +758,7 @@ fn render_dependency_tree(scope: &ReviewScope, index: usize, depth: usize, outpu
         "{}- {} ({})",
         indent,
         package.primary_alias(),
-        package.root.display()
+        display_path(&package.root)
     );
     for dependency in &package.dependencies {
         let child = &scope.packages[dependency.package_index];
@@ -767,7 +768,7 @@ fn render_dependency_tree(scope: &ReviewScope, index: usize, depth: usize, outpu
             "{}alias `{}` -> {}",
             child_indent,
             dependency.display_alias(),
-            child.root.display()
+            display_path(&child.root)
         );
         render_dependency_tree(scope, dependency.package_index, depth + 2, output);
     }
@@ -989,7 +990,7 @@ mod tests {
         let prompt = build_review_prompt(&scope);
 
         assert!(prompt.contains("Allowed review roots:"));
-        assert!(prompt.contains(&root.display().to_string()));
+        assert!(prompt.contains(&display_path(&root)));
         assert!(prompt.contains("Respond with these sections:"));
     }
 
