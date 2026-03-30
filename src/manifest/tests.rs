@@ -26,7 +26,13 @@ fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
+    let normalized_target = target
+        .components()
+        .fold(PathBuf::new(), |mut path, component| {
+            path.push(component.as_os_str());
+            path
+        });
+    std::os::windows::fs::symlink_dir(&normalized_target, link)
 }
 
 fn create_directory_symlink(target: &Path, link: &Path) -> bool {
