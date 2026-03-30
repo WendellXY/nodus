@@ -29,37 +29,6 @@ fn write_file(path: &Path, contents: &str) {
     file.write_all(contents.as_bytes()).unwrap();
 }
 
-#[cfg(unix)]
-fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(windows)]
-fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
-    let normalized_target = target
-        .components()
-        .fold(PathBuf::new(), |mut path, component| {
-            path.push(component.as_os_str());
-            path
-        });
-    std::os::windows::fs::symlink_dir(&normalized_target, link)
-}
-
-fn create_directory_symlink(target: &Path, link: &Path) -> bool {
-    if let Some(parent) = link.parent() {
-        fs::create_dir_all(parent).unwrap();
-    }
-    match create_directory_symlink_impl(target, link) {
-        Ok(()) => true,
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => false,
-        Err(error) => panic!(
-            "failed to create directory symlink {} -> {}: {error}",
-            link.display(),
-            target.display()
-        ),
-    }
-}
-
 fn run_git(path: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
@@ -610,6 +579,22 @@ fn git_output(path: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn stage_git_symlink(path: &Path, link: &Path, target: &str) {
+    let target_blob_path = path.join(".git-symlink-target");
+    write_file(&target_blob_path, target);
+    let blob = git_output(path, &["hash-object", "-w", "--", ".git-symlink-target"]);
+    fs::remove_file(target_blob_path).unwrap();
+    run_git(
+        path,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("120000,{blob},{}", display_path(link)),
+        ],
+    );
 }
 
 fn canonicalize_git_path_output(path: String) -> PathBuf {
@@ -1285,13 +1270,12 @@ fn add_dependency_accepts_repo_with_symlinked_submodule_skills() {
             "vendor/shared",
         ],
     );
-    if !create_directory_symlink(
-        Path::new("../vendor/shared/skills/review"),
-        &repo.path().join("skills/review"),
-    ) {
-        return;
-    }
     run_git(repo.path(), &["add", "."]);
+    stage_git_symlink(
+        repo.path(),
+        Path::new("skills/review"),
+        "../vendor/shared/skills/review",
+    );
     run_git(repo.path(), &["commit", "-m", "add shared skill"]);
     rename_current_branch(repo.path(), "main");
 
