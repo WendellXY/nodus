@@ -847,7 +847,7 @@ fn ensure_shared_repository(
                     ],
                 )?;
             }
-            git_run(mirror_path, ["config", "core.autocrlf", "false"])?;
+            configure_checkout_behavior(mirror_path)?;
             return Ok(());
         }
     }
@@ -881,7 +881,7 @@ fn ensure_shared_repository(
             mirror_path.to_string_lossy().as_ref(),
         ],
     )?;
-    git_run(mirror_path, ["config", "core.autocrlf", "false"])
+    configure_checkout_behavior(mirror_path)
 }
 
 fn ensure_shared_checkout(
@@ -895,7 +895,7 @@ fn ensure_shared_checkout(
     if checkout_path.exists() {
         match validate_shared_checkout(checkout_path, mirror_path, normalized_url) {
             Ok(()) => {
-                git_run(checkout_path, ["config", "core.autocrlf", "false"])?;
+                configure_checkout_behavior(checkout_path)?;
                 git_run(
                     checkout_path,
                     [
@@ -945,7 +945,7 @@ fn ensure_shared_checkout(
         ),
     )?;
     clear_stale_shared_checkout_registration(mirror_path, checkout_path);
-    git_run(mirror_path, ["config", "core.autocrlf", "false"])?;
+    configure_checkout_behavior(mirror_path)?;
     git_run(
         mirror_path,
         [
@@ -965,7 +965,7 @@ fn ensure_shared_checkout(
             mirror_path.display(),
         )
     })?;
-    git_run(checkout_path, ["config", "core.autocrlf", "false"])?;
+    configure_checkout_behavior(checkout_path)?;
     git_run(
         checkout_path,
         [
@@ -978,6 +978,12 @@ fn ensure_shared_checkout(
         ],
     )?;
     ensure_checkout_submodules(checkout_path, allow_network)?;
+    Ok(())
+}
+
+fn configure_checkout_behavior(path: &Path) -> Result<()> {
+    git_run(path, ["config", "core.autocrlf", "false"])?;
+    git_run(path, ["config", "core.symlinks", "true"])?;
     Ok(())
 }
 
@@ -1121,7 +1127,7 @@ fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<String> {
 mod tests {
     use super::*;
 
-    use std::io::Write;
+    use std::io::{self, Write};
     use std::process::Command;
 
     use tempfile::TempDir;
@@ -1167,6 +1173,33 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[cfg(unix)]
+    fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn create_directory_symlink_impl(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    fn create_directory_symlink(target: &Path, link: &Path) {
+        if let Some(parent) = link.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        create_directory_symlink_impl(target, link).unwrap();
+    }
+
+    fn remove_symlink_path(path: &Path) {
+        match fs::remove_file(path) {
+            Ok(()) => return,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) if error.kind() == io::ErrorKind::IsADirectory => {}
+            Err(error) => panic!("failed to remove {}: {error}", path.display()),
+        }
+        fs::remove_dir(path).unwrap();
     }
 
     #[test]
@@ -1509,5 +1542,43 @@ mod tests {
         assert_eq!(recovered.path, initial.path);
         assert!(recovered.path.is_dir());
         assert_eq!(recovered.rev, current_rev(repo.path()).unwrap());
+    }
+
+    #[test]
+    fn recovers_symlinked_directories_when_core_symlinks_is_disabled() {
+        let cache_root = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_file(
+            &repo.path().join("vendor/review/SKILL.md"),
+            "---\nname: Review\ndescription: Review code safely.\n---\n# Review\n",
+        );
+        create_directory_symlink(
+            Path::new("../vendor/review"),
+            &repo.path().join("skills/review"),
+        );
+        init_git_repo(repo.path());
+        rename_current_branch(repo.path(), "main");
+
+        let url = repo.path().to_string_lossy().to_string();
+        let reporter = Reporter::silent();
+        let checkout =
+            ensure_git_dependency(cache_root.path(), &url, None, true, &reporter).unwrap();
+
+        assert!(checkout.path.join("skills/review").is_dir());
+
+        remove_symlink_path(&checkout.path.join("skills/review"));
+        write_file(&checkout.path.join("skills/review"), "../vendor/review");
+        git_run(&checkout.path, ["config", "core.symlinks", "false"]).unwrap();
+        assert!(!checkout.path.join("skills/review").is_dir());
+
+        let recovered =
+            ensure_git_dependency(cache_root.path(), &url, None, true, &reporter).unwrap();
+
+        assert_eq!(recovered.path, checkout.path);
+        assert_eq!(
+            git_output(&recovered.path, ["config", "--get", "core.symlinks"]).unwrap(),
+            "true"
+        );
+        assert!(recovered.path.join("skills/review").is_dir());
     }
 }
