@@ -243,6 +243,7 @@ pub struct LoadedManifest {
     pub manifest: Manifest,
     pub discovered: PackageContents,
     pub warnings: Vec<String>,
+    pub(super) claude_plugin: Option<ClaudePluginExtras>,
     pub(super) extra_package_files: Vec<PathBuf>,
     pub(super) allows_empty_dependency_wrapper: bool,
     pub(super) allows_unpinned_git_dependencies: bool,
@@ -255,6 +256,42 @@ pub struct ResolvedWorkspaceMember {
     pub path: PathBuf,
     pub name: Option<String>,
     pub codex: Option<WorkspaceMemberCodexSpec>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct ClaudePluginExtras {
+    pub(super) skills: Vec<PathBuf>,
+    pub(super) agents: Vec<PathBuf>,
+    pub(super) commands: Vec<ClaudePluginCommandSpec>,
+    pub(super) mcp_servers: Vec<ClaudePluginMcpSource>,
+}
+
+impl ClaudePluginExtras {
+    pub(super) fn is_empty(&self) -> bool {
+        self.skills.is_empty()
+            && self.agents.is_empty()
+            && self.commands.is_empty()
+            && self.mcp_servers.is_empty()
+    }
+
+    pub(super) fn has_nodus_manageable_content(&self) -> bool {
+        !self.skills.is_empty()
+            || !self.agents.is_empty()
+            || !self.commands.is_empty()
+            || !self.mcp_servers.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ClaudePluginCommandSpec {
+    pub(super) id: Option<String>,
+    pub(super) path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ClaudePluginMcpSource {
+    Inline(BTreeMap<String, McpServerConfig>),
+    Path(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

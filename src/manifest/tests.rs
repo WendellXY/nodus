@@ -97,6 +97,15 @@ fn write_modern_claude_plugin_json(root: &Path, version: Option<&str>) {
     );
 }
 
+fn write_modern_claude_plugin_json_with_fields(root: &Path, fields: &[&str]) {
+    let mut all_fields = vec![String::from(r#"  "name": "plugin""#)];
+    all_fields.extend(fields.iter().map(|field| field.to_string()));
+    write_file(
+        &root.join(".claude-plugin/plugin.json"),
+        &format!("{{\n{}\n}}\n", all_fields.join(",\n")),
+    );
+}
+
 fn write_codex_marketplace(root: &Path, contents: &str) {
     write_file(&root.join(".agents/plugins/marketplace.json"), contents);
 }
@@ -900,6 +909,276 @@ fn accepts_dependency_repo_with_only_modern_claude_plugin_metadata_and_flat_mcp_
             .contains(&canonicalize_path(&temp.path().join(".claude-plugin/plugin.json")).unwrap())
     );
     assert!(package_files.contains(&canonicalize_path(&temp.path().join(".mcp.json")).unwrap()));
+}
+
+#[test]
+fn discovers_modern_claude_plugin_extra_component_paths_outside_standard_roots() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        temp.path(),
+        &[
+            r#"  "skills": ["./plugin-skills"]"#,
+            r#"  "agents": "./security.md""#,
+            r#"  "commands": ["./build.md"]"#,
+        ],
+    );
+    write_skill(&temp.path().join("plugin-skills/review"), "Review");
+    write_file(&temp.path().join("security.md"), "# Security\n");
+    write_file(&temp.path().join("build.md"), "# Build\n");
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert_eq!(
+        loaded
+            .discovered
+            .skills
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![("review", Path::new("plugin-skills/review"))]
+    );
+    assert_eq!(
+        loaded
+            .discovered
+            .agents
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![("security", Path::new("security.md"))]
+    );
+    assert_eq!(
+        loaded
+            .discovered
+            .commands
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![("build", Path::new("build.md"))]
+    );
+}
+
+#[test]
+fn discovers_object_mapped_modern_claude_plugin_commands_from_source_paths() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        temp.path(),
+        &[r#"  "commands": { "about": { "source": "./README.md" } }"#],
+    );
+    write_file(&temp.path().join("README.md"), "# About\n");
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert_eq!(loaded.discovered.commands.len(), 1);
+    assert_eq!(loaded.discovered.commands[0].id, "about");
+    assert_eq!(
+        loaded.discovered.commands[0].path,
+        PathBuf::from("README.md")
+    );
+}
+
+#[test]
+fn warns_when_modern_claude_plugin_command_uses_inline_content() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        temp.path(),
+        &[r#"  "commands": { "about": { "content": "Inline only" } }"#],
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.discovered.commands.is_empty());
+    assert!(
+        loaded
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("unsupported inline Claude plugin command `about`"))
+    );
+}
+
+#[test]
+fn warns_when_modern_claude_plugin_command_points_to_directory() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(temp.path(), &[r#"  "commands": "./command-dir""#]);
+    write_file(&temp.path().join("command-dir/build.md"), "# Build\n");
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.discovered.commands.is_empty());
+    assert!(
+        loaded
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("directory-backed commands are not supported"))
+    );
+}
+
+#[test]
+fn imports_modern_claude_plugin_manifest_inline_mcp_servers() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        temp.path(),
+        &[r#"  "mcpServers": { "github": { "type": "http", "url": "https://example.com/mcp" } }"#],
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    let github = loaded.manifest.mcp_servers.get("github").unwrap();
+    assert_eq!(github.transport_type.as_deref(), Some("http"));
+    assert_eq!(github.url.as_deref(), Some("https://example.com/mcp"));
+}
+
+#[test]
+fn imports_modern_claude_plugin_manifest_mcp_servers_from_relative_json_path() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        temp.path(),
+        &[r#"  "mcpServers": "./config/mcp.json""#],
+    );
+    write_file(
+        &temp.path().join("config/mcp.json"),
+        r#"{
+  "mcpServers": {
+    "figma": {
+      "url": "http://127.0.0.1:3845/mcp"
+    }
+  }
+}
+"#,
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    let figma = loaded.manifest.mcp_servers.get("figma").unwrap();
+    assert_eq!(figma.url.as_deref(), Some("http://127.0.0.1:3845/mcp"));
+    let package_files = loaded.package_files().unwrap();
+    assert!(
+        package_files.contains(&canonicalize_path(&temp.path().join("config/mcp.json")).unwrap())
+    );
+}
+
+#[test]
+fn overlays_modern_claude_plugin_manifest_mcp_servers_in_declaration_order() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        temp.path(),
+        &[
+            r#"  "mcpServers": ["./config/path.json", { "shared": { "command": "inline" }, "inlineOnly": { "command": "bun", "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "start"] } }, "./config/final.json"]"#,
+        ],
+    );
+    write_file(
+        &temp.path().join(".mcp.json"),
+        r#"{
+  "shared": {
+    "command": "base"
+  },
+  "baseOnly": {
+    "command": "base-only"
+  }
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("config/path.json"),
+        r#"{
+  "mcpServers": {
+    "shared": {
+      "command": "path"
+    },
+    "pathOnly": {
+      "command": "path-only"
+    }
+  }
+}
+"#,
+    );
+    write_file(&temp.path().join("tools.yaml"), "version: v1\n");
+    write_file(
+        &temp.path().join("config/final.json"),
+        r#"{
+  "shared": {
+    "command": "final"
+  },
+  "rooted": {
+    "command": "toolbox",
+    "args": ["--tools-file", "${CLAUDE_PLUGIN_ROOT}/tools.yaml", "--stdio"]
+  }
+}
+"#,
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert_eq!(
+        loaded
+            .manifest
+            .mcp_servers
+            .get("shared")
+            .unwrap()
+            .command
+            .as_deref(),
+        Some("final")
+    );
+    assert_eq!(
+        loaded
+            .manifest
+            .mcp_servers
+            .get("baseOnly")
+            .unwrap()
+            .command
+            .as_deref(),
+        Some("base-only")
+    );
+    assert_eq!(
+        loaded
+            .manifest
+            .mcp_servers
+            .get("pathOnly")
+            .unwrap()
+            .command
+            .as_deref(),
+        Some("path-only")
+    );
+    let inline_only = loaded.manifest.mcp_servers.get("inlineOnly").unwrap();
+    assert_eq!(inline_only.command.as_deref(), Some("bun"));
+    assert_eq!(
+        inline_only.args,
+        vec![String::from("run"), String::from("start")]
+    );
+    assert_eq!(
+        inline_only
+            .cwd
+            .as_ref()
+            .and_then(|cwd| canonicalize_path(cwd).ok()),
+        Some(canonicalize_path(temp.path()).unwrap())
+    );
+    let rooted = loaded.manifest.mcp_servers.get("rooted").unwrap();
+    assert_eq!(rooted.command.as_deref(), Some("toolbox"));
+    assert_eq!(rooted.args[0], "--tools-file");
+    assert_eq!(rooted.args[2], "--stdio");
+    assert!(!rooted.args[1].contains("${CLAUDE_PLUGIN_ROOT}"));
+    assert_eq!(
+        canonicalize_path(Path::new(&rooted.args[1])).unwrap(),
+        canonicalize_path(&temp.path().join("tools.yaml")).unwrap()
+    );
+}
+
+#[test]
+fn warns_when_modern_claude_plugin_manifest_mcp_servers_use_unsupported_paths() {
+    let temp = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        temp.path(),
+        &[r#"  "mcpServers": "./plugin.mcpb""#],
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.manifest.mcp_servers.is_empty());
+    assert!(
+        loaded
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("unsupported Claude plugin field `mcpServers` path"))
+    );
 }
 
 #[test]

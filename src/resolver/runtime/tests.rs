@@ -71,6 +71,15 @@ fn write_modern_claude_plugin_json(path: &Path, version: &str) {
     );
 }
 
+fn write_modern_claude_plugin_json_with_fields(path: &Path, fields: &[&str]) {
+    let mut all_fields = vec![String::from(r#"  "name": "plugin""#)];
+    all_fields.extend(fields.iter().map(|field| field.to_string()));
+    write_file(
+        &path.join(".claude-plugin/plugin.json"),
+        &format!("{{\n{}\n}}\n", all_fields.join(",\n")),
+    );
+}
+
 fn write_codex_marketplace(path: &Path, contents: &str) {
     write_file(&path.join(".agents/plugins/marketplace.json"), contents);
 }
@@ -1744,6 +1753,75 @@ fn add_dependency_accepts_marketplace_plugin_that_points_at_root_claude_plugin_m
 }
 
 #[test]
+fn add_dependency_accepts_modern_claude_plugin_extra_component_paths_and_syncs_contents() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    let plugin = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        plugin.path(),
+        &[
+            r#"  "version": "1.0.0""#,
+            r#"  "skills": ["./plugin-skills"]"#,
+            r#"  "agents": "./security.md""#,
+            r#"  "commands": ["./build.md"]"#,
+        ],
+    );
+    write_skill(&plugin.path().join("plugin-skills/review"), "Review");
+    write_file(&plugin.path().join("security.md"), "# Security\n");
+    write_file(&plugin.path().join("build.md"), "# Build\n");
+    init_git_repo(plugin.path());
+    tag_repo(plugin.path(), "v0.4.0");
+
+    add_dependency_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        &plugin.path().to_string_lossy(),
+        Some("v0.4.0"),
+        &[Adapter::Claude],
+        &[],
+    )
+    .unwrap();
+
+    let alias = normalize_alias_from_url(&plugin.path().to_string_lossy()).unwrap();
+    let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    let package = lockfile
+        .packages
+        .iter()
+        .find(|package| package.alias == alias)
+        .unwrap();
+    assert_eq!(package.version_tag.as_deref(), Some("1.0.0"));
+    assert_eq!(package.skills, vec!["review"]);
+    assert_eq!(package.agents, vec!["security"]);
+    assert_eq!(package.commands, vec!["build"]);
+
+    let package = resolve_project(temp.path(), cache.path(), ResolveMode::Sync)
+        .unwrap()
+        .packages
+        .into_iter()
+        .find(|package| package.alias == alias)
+        .unwrap();
+    let managed_skill_id = namespaced_skill_id(&package, "review");
+    let managed_agent_file = namespaced_file_name(&package, "security", "md");
+    let managed_command_file = namespaced_file_name(&package, "build", "md");
+    assert!(
+        temp.path()
+            .join(format!(".claude/skills/{managed_skill_id}/SKILL.md"))
+            .exists()
+    );
+    assert!(
+        temp.path()
+            .join(format!(".claude/agents/{managed_agent_file}"))
+            .exists()
+    );
+    assert!(
+        temp.path()
+            .join(format!(".claude/commands/{managed_command_file}"))
+            .exists()
+    );
+}
+
+#[test]
 fn add_dependency_writes_marketplace_version_alongside_default_branch() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
@@ -2256,6 +2334,122 @@ fn add_dependency_accepts_modern_claude_mcp_only_package_and_syncs_mcp_metadata(
     assert_eq!(
         json["mcpServers"][format!("{alias}__discord")]["args"],
         serde_json::json!(["run", "--shell=bun", "--silent", "start"])
+    );
+}
+
+#[test]
+fn add_dependency_overlays_modern_claude_plugin_manifest_mcp_servers_and_syncs_metadata() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    let plugin = TempDir::new().unwrap();
+    write_modern_claude_plugin_json_with_fields(
+        plugin.path(),
+        &[
+            r#"  "version": "0.2.0""#,
+            r#"  "mcpServers": ["./config/path.json", { "shared": { "command": "inline" }, "inlineOnly": { "command": "bun", "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "start"] } }, "./config/final.json"]"#,
+        ],
+    );
+    write_file(
+        &plugin.path().join(".mcp.json"),
+        r#"{
+  "shared": {
+    "command": "base"
+  },
+  "baseOnly": {
+    "command": "base-only"
+  }
+}
+"#,
+    );
+    write_file(
+        &plugin.path().join("config/path.json"),
+        r#"{
+  "mcpServers": {
+    "shared": {
+      "command": "path"
+    },
+    "pathOnly": {
+      "command": "path-only"
+    }
+  }
+}
+"#,
+    );
+    write_file(&plugin.path().join("tools.yaml"), "version: v1\n");
+    write_file(
+        &plugin.path().join("config/final.json"),
+        r#"{
+  "shared": {
+    "command": "final"
+  },
+  "rooted": {
+    "command": "toolbox",
+    "args": ["--tools-file", "${CLAUDE_PLUGIN_ROOT}/tools.yaml", "--stdio"]
+  }
+}
+"#,
+    );
+    init_git_repo(plugin.path());
+    tag_repo(plugin.path(), "v0.4.0");
+
+    add_dependency_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        &plugin.path().to_string_lossy(),
+        Some("v0.4.0"),
+        &[Adapter::Codex],
+        &[],
+    )
+    .unwrap();
+
+    let alias = normalize_alias_from_url(&plugin.path().to_string_lossy()).unwrap();
+    let package = resolve_project(temp.path(), cache.path(), ResolveMode::Sync)
+        .unwrap()
+        .packages
+        .into_iter()
+        .find(|package| package.alias == alias)
+        .unwrap();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".mcp.json")).unwrap()).unwrap();
+    assert_eq!(
+        json["mcpServers"][format!("{alias}__shared")]["command"].as_str(),
+        Some("final")
+    );
+    assert_eq!(
+        json["mcpServers"][format!("{alias}__baseOnly")]["command"].as_str(),
+        Some("base-only")
+    );
+    assert_eq!(
+        json["mcpServers"][format!("{alias}__pathOnly")]["command"].as_str(),
+        Some("path-only")
+    );
+    assert_eq!(
+        json["mcpServers"][format!("{alias}__inlineOnly")]["command"].as_str(),
+        Some("bun")
+    );
+    assert_eq!(
+        json["mcpServers"][format!("{alias}__inlineOnly")]["args"],
+        serde_json::json!(["run", "start"])
+    );
+    assert_eq!(
+        canonicalize_path(Path::new(
+            json["mcpServers"][format!("{alias}__inlineOnly")]["cwd"]
+                .as_str()
+                .unwrap(),
+        ))
+        .unwrap(),
+        canonicalize_path(&package.root).unwrap()
+    );
+    let rooted_args = json["mcpServers"][format!("{alias}__rooted")]["args"]
+        .as_array()
+        .unwrap();
+    assert_eq!(rooted_args[0].as_str(), Some("--tools-file"));
+    assert_eq!(rooted_args[2].as_str(), Some("--stdio"));
+    assert_eq!(
+        canonicalize_path(Path::new(rooted_args[1].as_str().unwrap())).unwrap(),
+        canonicalize_path(&package.root.join("tools.yaml")).unwrap()
     );
 }
 

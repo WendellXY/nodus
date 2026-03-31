@@ -33,6 +33,7 @@ pub fn load_root_from_dir_allow_missing(root: &Path) -> Result<LoadedManifest> {
         manifest: Manifest::default(),
         discovered: super::PackageContents::default(),
         warnings: Vec::new(),
+        claude_plugin: None,
         extra_package_files: Vec::new(),
         allows_empty_dependency_wrapper: false,
         allows_unpinned_git_dependencies: false,
@@ -59,7 +60,7 @@ pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
         (Manifest::default(), Vec::new(), None)
     };
 
-    let discovered = discover_package_contents(&root, &manifest)?;
+    let discovered = discover_package_contents(&root, &manifest, None)?;
 
     let mut loaded = LoadedManifest {
         root: root.clone(),
@@ -67,6 +68,7 @@ pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
         manifest,
         discovered,
         warnings,
+        claude_plugin: None,
         extra_package_files: Vec::new(),
         allows_empty_dependency_wrapper: false,
         allows_unpinned_git_dependencies: false,
@@ -83,6 +85,11 @@ pub fn load_from_dir(root: &Path, role: PackageRole) -> Result<LoadedManifest> {
 
     import_claude_plugin_metadata(&mut loaded)?;
     import_codex_plugin_metadata(&mut loaded)?;
+    loaded.discovered = discover_package_contents(
+        &loaded.root,
+        &loaded.manifest,
+        loaded.claude_plugin.as_ref(),
+    )?;
 
     if loaded.manifest.version.is_none() {
         loaded.manifest.version = load_claude_plugin_version(&loaded.root, &mut loaded.warnings)?;
