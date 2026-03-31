@@ -780,7 +780,7 @@ fn sync_on_startup_files(
     let mut files = Vec::new();
 
     if selected_adapters.contains(Adapter::Claude) {
-        files.extend(super::claude::sync_on_startup_files(project_root));
+        files.extend(super::claude::sync_on_startup_files(project_root)?);
     }
     if selected_adapters.contains(Adapter::OpenCode) {
         files.extend(super::opencode::sync_on_startup_files(project_root));

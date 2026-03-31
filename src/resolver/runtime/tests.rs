@@ -3891,6 +3891,91 @@ sync_on_startup = true
 }
 
 #[test]
+fn sync_merges_claude_startup_hook_into_existing_local_settings_without_duplicates() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[adapters]
+enabled = ["claude"]
+
+[launch_hooks]
+sync_on_startup = true
+"#,
+    );
+    write_file(
+        &temp.path().join(".claude/settings.local.json"),
+        r#"{
+  "permissions": {
+    "allow": ["Bash(git status)"]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/resume.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/custom-startup.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.local.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        settings["permissions"]["allow"][0].as_str(),
+        Some("Bash(git status)")
+    );
+
+    let session_start = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(session_start.len(), 2);
+
+    let startup = session_start
+        .iter()
+        .find(|entry| entry["matcher"].as_str() == Some("startup"))
+        .unwrap();
+    let startup_hooks = startup["hooks"].as_array().unwrap();
+    assert_eq!(startup_hooks.len(), 2);
+    assert!(startup_hooks.iter().any(|hook| {
+        hook["type"].as_str() == Some("command")
+            && hook["command"].as_str() == Some("./scripts/custom-startup.sh")
+    }));
+    assert_eq!(
+        startup_hooks
+            .iter()
+            .filter(|hook| {
+                hook["type"].as_str() == Some("command")
+                    && hook["command"].as_str() == Some("./.claude/hooks/nodus-sync.sh")
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn sync_warns_when_launch_hooks_are_unsupported_for_selected_adapters() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde_json::{Map, Value, json};
 
 use crate::adapters::{
     ArtifactKind, ManagedArtifactNames, ManagedFile, managed_artifact_path, managed_skill_root,
@@ -92,33 +93,18 @@ pub fn rule_file(
     )
 }
 
-pub fn sync_on_startup_files(project_root: &Path) -> Vec<ManagedFile> {
-    vec![
+pub fn sync_on_startup_files(project_root: &Path) -> Result<Vec<ManagedFile>> {
+    let settings_path = project_root.join(".claude/settings.local.json");
+    Ok(vec![
         ManagedFile {
             path: project_root.join(".claude/hooks/nodus-sync.sh"),
             contents: sync_script_contents("CLAUDE_PROJECT_DIR"),
         },
         ManagedFile {
-            path: project_root.join(".claude/settings.local.json"),
-            contents: br#"{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "./.claude/hooks/nodus-sync.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-"#
-            .to_vec(),
+            path: settings_path.clone(),
+            contents: merged_settings_local_contents(&settings_path)?,
         },
-    ]
+    ])
 }
 
 fn copy_directory(
@@ -177,4 +163,95 @@ fi
 "#
     )
     .into_bytes()
+}
+
+fn merged_settings_local_contents(path: &Path) -> Result<Vec<u8>> {
+    let mut root = if path.exists() {
+        serde_json::from_slice::<Value>(
+            &fs::read(path)
+                .with_context(|| format!("failed to read existing {}", path.display()))?,
+        )
+        .with_context(|| format!("failed to parse existing {}", path.display()))?
+    } else {
+        Value::Object(Map::new())
+    };
+
+    let root_object = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("{} must contain a JSON object", path.display()))?;
+    let hooks = object_field(root_object, "hooks", path)?;
+    let session_start = array_field(hooks, "SessionStart", path)?;
+
+    if let Some(existing) = session_start.iter_mut().find(|entry| {
+        entry
+            .get("matcher")
+            .and_then(Value::as_str)
+            .is_some_and(|matcher| matcher == "startup")
+    }) {
+        let existing_hooks = array_field(
+            existing.as_object_mut().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} hooks.SessionStart entries must contain JSON objects",
+                    path.display()
+                )
+            })?,
+            "hooks",
+            path,
+        )?;
+
+        let already_present = existing_hooks.iter().any(|hook| {
+            hook.get("type").and_then(Value::as_str) == Some("command")
+                && hook.get("command").and_then(Value::as_str)
+                    == Some("./.claude/hooks/nodus-sync.sh")
+        });
+        if !already_present {
+            existing_hooks.push(sync_hook_value());
+        }
+    } else {
+        session_start.push(json!({
+            "matcher": "startup",
+            "hooks": [sync_hook_value()],
+        }));
+    }
+
+    let mut contents =
+        serde_json::to_vec_pretty(&root).context("failed to serialize Claude settings")?;
+    contents.push(b'\n');
+    Ok(contents)
+}
+
+fn object_field<'a>(
+    object: &'a mut Map<String, Value>,
+    key: &str,
+    path: &Path,
+) -> Result<&'a mut Map<String, Value>> {
+    let value = object
+        .entry(key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    value.as_object_mut().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} field `{key}` must contain a JSON object",
+            path.display()
+        )
+    })
+}
+
+fn array_field<'a>(
+    object: &'a mut Map<String, Value>,
+    key: &str,
+    path: &Path,
+) -> Result<&'a mut Vec<Value>> {
+    let value = object
+        .entry(key.to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    value.as_array_mut().ok_or_else(|| {
+        anyhow::anyhow!("{} field `{key}` must contain a JSON array", path.display())
+    })
+}
+
+fn sync_hook_value() -> Value {
+    json!({
+        "type": "command",
+        "command": "./.claude/hooks/nodus-sync.sh",
+    })
 }
