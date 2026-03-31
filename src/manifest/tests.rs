@@ -75,6 +75,28 @@ fn write_workspace_member(root: &Path, skill_name: &str) {
     );
 }
 
+fn write_workspace_root_with_codex_policy(root: &Path, installation: &str, authentication: &str) {
+    write_workspace_member(&root.join("plugins/axiom"), "Axiom");
+    write_file(
+        &root.join(MANIFEST_FILE),
+        &format!(
+            r#"
+[workspace]
+members = ["plugins/axiom"]
+
+[workspace.package.axiom]
+path = "plugins/axiom"
+name = "Axiom"
+
+[workspace.package.axiom.codex]
+category = "Productivity"
+installation = "{installation}"
+authentication = "{authentication}"
+"#
+        ),
+    );
+}
+
 fn write_marketplace(root: &Path, contents: &str) {
     write_file(&root.join(".claude-plugin/marketplace.json"), contents);
 }
@@ -258,6 +280,55 @@ name = "Axiom"
 
     assert!(loaded.discovered.is_empty());
     assert!(loaded.manifest.workspace.is_some());
+}
+
+#[test]
+fn accepts_all_supported_codex_workspace_policy_literals() {
+    for installation in ["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"] {
+        let temp = TempDir::new().unwrap();
+        write_workspace_root_with_codex_policy(temp.path(), installation, "ON_INSTALL");
+
+        let loaded = load_root_from_dir(temp.path()).unwrap();
+        let members = loaded.resolved_workspace_members().unwrap();
+        let codex = members[0].codex.as_ref().unwrap();
+
+        assert_eq!(codex.installation, installation);
+        assert_eq!(codex.authentication, "ON_INSTALL");
+    }
+
+    for authentication in ["ON_INSTALL", "ON_USE"] {
+        let temp = TempDir::new().unwrap();
+        write_workspace_root_with_codex_policy(temp.path(), "AVAILABLE", authentication);
+
+        let loaded = load_root_from_dir(temp.path()).unwrap();
+        let members = loaded.resolved_workspace_members().unwrap();
+        let codex = members[0].codex.as_ref().unwrap();
+
+        assert_eq!(codex.installation, "AVAILABLE");
+        assert_eq!(codex.authentication, authentication);
+    }
+}
+
+#[test]
+fn rejects_workspace_member_with_invalid_codex_installation_policy() {
+    let temp = TempDir::new().unwrap();
+    write_workspace_root_with_codex_policy(temp.path(), "ALWAYS", "ON_INSTALL");
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+
+    assert!(error.contains("workspace.package.axiom.codex.installation"));
+    assert!(error.contains("NOT_AVAILABLE, AVAILABLE, INSTALLED_BY_DEFAULT"));
+}
+
+#[test]
+fn rejects_workspace_member_with_invalid_codex_authentication_policy() {
+    let temp = TempDir::new().unwrap();
+    write_workspace_root_with_codex_policy(temp.path(), "AVAILABLE", "ALWAYS");
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+
+    assert!(error.contains("workspace.package.axiom.codex.authentication"));
+    assert!(error.contains("ON_INSTALL, ON_USE"));
 }
 
 #[test]
@@ -1655,6 +1726,7 @@ fn accepts_dependency_repo_with_codex_marketplace_wrapper() {
     write_codex_marketplace(
         temp.path(),
         r#"{
+  "name": "workspace-plugins",
   "plugins": [
     {
       "name": "Axiom",

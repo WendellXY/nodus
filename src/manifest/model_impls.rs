@@ -14,6 +14,10 @@ use super::*;
 use crate::adapters::Adapter;
 use crate::paths::{display_path, strip_path_prefix};
 
+const CODEX_INSTALLATION_POLICIES: &[&str] =
+    &["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"];
+const CODEX_AUTHENTICATION_POLICIES: &[&str] = &["ON_INSTALL", "ON_USE"];
+
 impl LoadedManifest {
     pub fn validate(&self, role: PackageRole) -> Result<()> {
         if let Some(api_version) = &self.manifest.api_version
@@ -292,6 +296,7 @@ impl LoadedManifest {
         id: &str,
         member: &WorkspaceMemberSpec,
     ) -> Result<WorkspaceMemberStatus> {
+        validate_workspace_member_codex_metadata(id, member)?;
         let warning = match validate_workspace_member(self, id, member) {
             Ok(()) => None,
             Err(error) => Some(format!("ignoring workspace member `{id}`: {error}")),
@@ -801,18 +806,6 @@ fn validate_workspace_member(
             format!("manifest field `workspace.package.{id}.path` must point to a directory")
         })?;
 
-    if let Some(codex) = &member.codex {
-        if codex.category.trim().is_empty() {
-            bail!("manifest field `workspace.package.{id}.codex.category` must not be empty");
-        }
-        if codex.installation.trim().is_empty() {
-            bail!("manifest field `workspace.package.{id}.codex.installation` must not be empty");
-        }
-        if codex.authentication.trim().is_empty() {
-            bail!("manifest field `workspace.package.{id}.codex.authentication` must not be empty");
-        }
-    }
-
     load_dependency_from_dir(&resolved).with_context(|| {
         format!(
             "workspace member `{id}` at `{}` is invalid",
@@ -820,6 +813,37 @@ fn validate_workspace_member(
         )
     })?;
 
+    Ok(())
+}
+
+fn validate_workspace_member_codex_metadata(id: &str, member: &WorkspaceMemberSpec) -> Result<()> {
+    if let Some(codex) = &member.codex {
+        if codex.category.trim().is_empty() {
+            bail!("manifest field `workspace.package.{id}.codex.category` must not be empty");
+        }
+        validate_codex_workspace_policy(
+            &format!("manifest field `workspace.package.{id}.codex.installation`"),
+            &codex.installation,
+            CODEX_INSTALLATION_POLICIES,
+        )?;
+        validate_codex_workspace_policy(
+            &format!("manifest field `workspace.package.{id}.codex.authentication`"),
+            &codex.authentication,
+            CODEX_AUTHENTICATION_POLICIES,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_codex_workspace_policy(field: &str, value: &str, allowed: &[&str]) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{field} must not be empty");
+    }
+    if !allowed.contains(&value) {
+        bail!("{field} must be one of: {}", allowed.join(", "));
+    }
     Ok(())
 }
 
