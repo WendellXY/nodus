@@ -317,6 +317,31 @@ authentication = "ON_INSTALL"
     );
 }
 
+fn write_workspace_dependency_with_non_codex_member(path: &Path) {
+    write_manifest(
+        path,
+        r#"
+[workspace]
+members = ["plugins/axiom", "plugins/firebase"]
+
+[workspace.package.axiom]
+path = "plugins/axiom"
+name = "Axiom"
+
+[workspace.package.axiom.codex]
+category = "Productivity"
+installation = "AVAILABLE"
+authentication = "ON_INSTALL"
+
+[workspace.package.firebase]
+path = "plugins/firebase"
+name = "Firebase"
+"#,
+    );
+    write_skill(&path.join("plugins/axiom/skills/review"), "Review");
+    write_skill(&path.join("plugins/firebase/skills/checks"), "Checks");
+}
+
 fn tag_repo(path: &Path, tag: &str) {
     run_git(path, &["tag", tag]);
 }
@@ -1268,7 +1293,15 @@ fn sync_generates_workspace_marketplace_files() {
         &fs::read_to_string(repo.path().join(".agents/plugins/marketplace.json")).unwrap(),
     )
     .unwrap();
+    assert_eq!(
+        codex["name"].as_str(),
+        Some(expected_marketplace_name.as_str())
+    );
     assert_eq!(codex["plugins"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        codex["plugins"][0]["source"]["path"].as_str(),
+        Some("./plugins/axiom")
+    );
     assert_eq!(
         codex["plugins"][0]["policy"]["installation"].as_str(),
         Some("AVAILABLE")
@@ -1324,8 +1357,57 @@ fn sync_skips_invalid_workspace_members_in_marketplace_files() {
         &fs::read_to_string(repo.path().join(".agents/plugins/marketplace.json")).unwrap(),
     )
     .unwrap();
+    assert_eq!(
+        codex["name"].as_str(),
+        Some(expected_marketplace_name.as_str())
+    );
     assert_eq!(codex["plugins"].as_array().unwrap().len(), 1);
     assert_eq!(codex["plugins"][0]["name"].as_str(), Some("Axiom"));
+    assert_eq!(
+        codex["plugins"][0]["source"]["path"].as_str(),
+        Some("./plugins/axiom")
+    );
+}
+
+#[test]
+fn sync_emits_codex_marketplace_for_only_workspace_members_with_codex_metadata() {
+    let repo = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_workspace_dependency_with_non_codex_member(repo.path());
+    let expected_owner_name = repo
+        .path()
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap()
+        .to_string();
+
+    sync_in_dir_with_adapters(repo.path(), cache.path(), false, false, &Adapter::ALL).unwrap();
+
+    let claude: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(repo.path().join(".claude-plugin/marketplace.json")).unwrap(),
+    )
+    .unwrap();
+    let expected_marketplace_name = normalize_workspace_marketplace_name(&expected_owner_name);
+    assert_eq!(
+        claude["name"].as_str(),
+        Some(expected_marketplace_name.as_str())
+    );
+    assert_eq!(claude["plugins"].as_array().unwrap().len(), 2);
+
+    let codex: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(repo.path().join(".agents/plugins/marketplace.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        codex["name"].as_str(),
+        Some(expected_marketplace_name.as_str())
+    );
+    assert_eq!(codex["plugins"].as_array().unwrap().len(), 1);
+    assert_eq!(codex["plugins"][0]["name"].as_str(), Some("Axiom"));
+    assert_eq!(
+        codex["plugins"][0]["source"]["path"].as_str(),
+        Some("./plugins/axiom")
+    );
 }
 
 #[test]
