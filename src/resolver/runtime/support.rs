@@ -582,7 +582,13 @@ pub(super) fn recover_runtime_owned_paths_from_disk(
 }
 
 fn path_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]) -> bool {
-    if path.is_file() {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() {
+        return false;
+    }
+    if metadata.is_file() {
         return planned_files
             .iter()
             .find(|file| file.path == path)
@@ -591,7 +597,7 @@ fn path_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]
                     && parent_directory_exactly_matches_when_multi_file(file, planned_files)
             });
     }
-    if path.is_dir() {
+    if metadata.is_dir() {
         return directory_exactly_matches_planned_files(path, planned_files);
     }
     false
@@ -612,7 +618,9 @@ fn parent_directory_exactly_matches_when_multi_file(
 }
 
 fn file_exactly_matches_planned_contents(file: &ManagedFile) -> bool {
-    file.path.is_file()
+    fs::symlink_metadata(&file.path)
+        .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
         && fs::read(&file.path)
             .map(|contents| contents == file.contents)
             .unwrap_or(false)
@@ -656,6 +664,12 @@ fn directory_exactly_matches_planned_files(path: &Path, planned_files: &[Managed
 }
 
 fn collect_entries_under_dir(path: &Path) -> Result<HashSet<PathBuf>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to read metadata for {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Ok(HashSet::new());
+    }
+
     let mut entries = HashSet::new();
     let mut pending = vec![path.to_path_buf()];
 
@@ -667,13 +681,15 @@ fn collect_entries_under_dir(path: &Path) -> Result<HashSet<PathBuf>> {
                 format!("failed to inspect managed directory {}", current.display())
             })?;
             let entry_path = entry.path();
-            let metadata = entry
-                .metadata()
+            let file_type = entry
+                .file_type()
                 .with_context(|| format!("failed to read metadata for {}", entry_path.display()))?;
-            if metadata.is_dir() {
+            if file_type.is_symlink() {
+                return Ok(HashSet::new());
+            } else if file_type.is_dir() {
                 entries.insert(entry_path.clone());
                 pending.push(entry_path);
-            } else if metadata.is_file() {
+            } else if file_type.is_file() {
                 entries.insert(entry_path);
             } else {
                 return Ok(HashSet::new());
