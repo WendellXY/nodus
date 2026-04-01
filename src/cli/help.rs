@@ -47,17 +47,25 @@ After a project-scoped install, run `nodus doctor` to confirm the repo is consis
 
 pub(super) const REMOVE_ABOUT: &str = "Remove a dependency and prune its managed outputs";
 
-pub(super) const REMOVE_LONG_ABOUT: &str = r#"Remove a configured dependency, update `nodus.toml`, and prune the runtime files that dependency no longer owns."#;
+pub(super) const REMOVE_LONG_ABOUT: &str = r#"Remove a configured dependency, update `nodus.toml`, and prune the runtime files that dependency no longer owns.
 
-pub(super) const REMOVE_AFTER_LONG_HELP: &str = r#"Examples:
+Use this when you want to delete a package from the repo and keep the remaining managed files aligned with the current manifest.
+
+Run `nodus doctor` next to confirm the repo is still consistent."#;
+
+pub(super) const REMOVE_AFTER_LONG_HELP: &str = r#"Common options:
+  nodus remove <package>
+  nodus remove <package> --global
+  nodus remove <package> --dry-run
+
+Examples:
   nodus remove nodus
   nodus remove nodus --global
   nodus remove nodus --dry-run"#;
 
 pub(super) const LIST_ABOUT: &str = "List configured dependencies and any locked metadata";
 
-pub(super) const LIST_LONG_ABOUT: &str =
-    "List the dependencies recorded in `nodus.toml` together with any resolved metadata from `nodus.lock`.";
+pub(super) const LIST_LONG_ABOUT: &str = "List the dependencies recorded in `nodus.toml` together with any resolved metadata from `nodus.lock`.";
 
 pub(super) const LIST_AFTER_LONG_HELP: &str = r#"Examples:
   nodus list
@@ -97,9 +105,18 @@ pub(super) const UPDATE_ABOUT: &str = "Update configured dependencies and resync
 
 pub(super) const UPDATE_LONG_ABOUT: &str = r#"Resolve newer allowed versions for configured dependencies, rewrite `nodus.lock`, and sync managed outputs to match the new result.
 
-Use `nodus update` when you want newer package revisions. Use `nodus sync` when you only want to rebuild from the versions you already have recorded."#;
+Use this when you want to upgrade what this repo already declares.
 
-pub(super) const UPDATE_AFTER_LONG_HELP: &str = r#"Examples:
+Use `nodus update` when you want newer package revisions. Use `nodus sync` when you only want to rebuild from the versions you already have recorded.
+
+Run `nodus doctor` next to verify the repo is consistent."#;
+
+pub(super) const UPDATE_AFTER_LONG_HELP: &str = r#"Common options:
+  nodus update
+  nodus update --dry-run
+  nodus update --allow-high-sensitivity
+
+Examples:
   nodus update
   nodus update --dry-run
   nodus update --allow-high-sensitivity"#;
@@ -126,8 +143,7 @@ pub(super) const RELAY_AFTER_LONG_HELP: &str = r#"Examples:
 
 pub(super) const INIT_ABOUT: &str = "Create a minimal nodus.toml and example skill";
 
-pub(super) const INIT_LONG_ABOUT: &str =
-    "Create a minimal `nodus.toml` and example package content when you are starting a new Nodus package repo.";
+pub(super) const INIT_LONG_ABOUT: &str = "Create a minimal `nodus.toml` and example package content when you are starting a new Nodus package repo.";
 
 pub(super) const INIT_AFTER_LONG_HELP: &str = r#"Examples:
   nodus init
@@ -135,11 +151,21 @@ pub(super) const INIT_AFTER_LONG_HELP: &str = r#"Examples:
 
 pub(super) const SYNC_LONG_ABOUT: &str = r#"Resolve the dependencies already declared in `nodus.toml` and write the managed adapter outputs that should exist for the current repo.
 
-Use `nodus sync` after manifest changes, after editing package content locally, or when you want to rebuild outputs without upgrading dependencies."#;
+Use this when you want to rebuild from what this repo already declares.
+
+Use `nodus sync` after manifest changes, after editing package content locally, or when you want to rebuild outputs without upgrading dependencies.
+
+Run `nodus doctor` next to verify the repo stays healthy."#;
 
 pub(super) const SYNC_ABOUT: &str = "Resolve dependencies and write managed runtime outputs";
 
-pub(super) const SYNC_AFTER_LONG_HELP: &str = r#"Examples:
+pub(super) const SYNC_AFTER_LONG_HELP: &str = r#"Common options:
+  nodus sync
+  nodus sync --locked
+  nodus sync --frozen
+  nodus sync --force
+
+Examples:
   nodus sync
   nodus sync --locked
   nodus sync --frozen
@@ -164,15 +190,30 @@ After cleaning the cache, run `nodus sync` again when you want Nodus to recreate
 
 pub(super) const COMPLETION_ABOUT: &str = "Generate shell completion scripts";
 
-pub(super) const COMPLETION_LONG_ABOUT: &str =
-    "Generate shell completion scripts for `nodus` so the shell can suggest commands and flags interactively.";
+pub(super) const COMPLETION_LONG_ABOUT: &str = "Generate shell completion scripts for `nodus` so the shell can suggest commands and flags interactively.";
 
-pub(super) const DOCTOR_ABOUT: &str = "Validate lockfile, shared store, and managed output consistency";
+pub(super) const DOCTOR_ABOUT: &str =
+    "Validate lockfile, shared store, and managed output consistency";
 
-pub(super) const DOCTOR_LONG_ABOUT: &str = r#"Validate that `nodus.toml`, `nodus.lock`, the shared store, and the managed adapter outputs are still in sync.
+pub(super) const DOCTOR_LONG_ABOUT: &str = r#"If Nodus feels broken, start here.
+
+Default behavior:
+  - checks the repo state
+  - checks and auto-fixes safe issues
+  - asks before risky cleanup
+
+Validate that `nodus.toml`, `nodus.lock`, the shared store, and the managed adapter outputs are still in sync.
 
 Run this after `nodus add`, `nodus sync`, `nodus update`, or `nodus remove` when you want a final health check."#;
 
-pub(super) const DOCTOR_AFTER_LONG_HELP: &str = r#"Examples:
+pub(super) const DOCTOR_AFTER_LONG_HELP: &str = r#"Common commands:
   nodus doctor
+  nodus doctor --check
+  nodus doctor --force
+  nodus doctor --json
+
+Examples:
+  nodus doctor
+  nodus doctor --check
+  nodus doctor --force
   nodus doctor --json"#;

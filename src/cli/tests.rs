@@ -328,7 +328,30 @@ fn parses_json_flags_for_read_only_commands() {
 
     assert!(matches!(info.command, Command::Info { json: true, .. }));
     assert!(matches!(outdated.command, Command::Outdated { json: true }));
-    assert!(matches!(doctor.command, Command::Doctor { json: true }));
+    assert!(matches!(doctor.command, Command::Doctor { json: true, .. }));
+}
+
+#[test]
+fn doctor_command_parses_check_and_force_flags() {
+    let check = Cli::try_parse_from(["nodus", "doctor", "--check"]).unwrap();
+    let force = Cli::try_parse_from(["nodus", "doctor", "--force"]).unwrap();
+
+    assert!(matches!(
+        check.command,
+        Command::Doctor {
+            check: true,
+            force: false,
+            json: false
+        }
+    ));
+    assert!(matches!(
+        force.command,
+        Command::Doctor {
+            check: false,
+            force: true,
+            json: false
+        }
+    ));
 }
 
 #[test]
@@ -601,10 +624,16 @@ fn root_help_leads_with_guided_workflows() {
     assert!(help.contains("Display resolved package metadata"));
     assert!(help.contains("Check configured dependencies for newer tags or branch head changes"));
     assert!(help.contains("Update configured dependencies and resync managed outputs"));
-    assert!(help.contains("Check for or install a newer nodus CLI when the install method is supported"));
+    assert!(
+        help.contains(
+            "Check for or install a newer nodus CLI when the install method is supported"
+        )
+    );
     assert!(help.contains("Clear shared repository, checkout, and snapshot cache data"));
     assert!(help.contains("Generate shell completion scripts"));
-    assert!(help.contains("Use an AI review agent to assess whether a package graph looks safe to use"));
+    assert!(
+        help.contains("Use an AI review agent to assess whether a package graph looks safe to use")
+    );
     assert!(help.contains("Validate lockfile, shared store, and managed output consistency"));
     assert!(help.contains("Project-scoped installs are the default"));
     assert!(help.contains("Most common tasks"));
@@ -637,7 +666,9 @@ fn add_help_leads_with_safe_example_and_next_step() {
     assert!(help.contains("nodus add nodus-rs/nodus --adapter codex"));
     assert!(help.contains("What this changes"));
     assert!(help.contains("Run `nodus doctor` next"));
-    assert!(help.contains("After a project-scoped install, run `nodus doctor` to confirm the repo is consistent."));
+    assert!(help.contains(
+        "After a project-scoped install, run `nodus doctor` to confirm the repo is consistent."
+    ));
 }
 
 #[test]
@@ -691,6 +722,22 @@ fn sync_help_describes_force() {
 }
 
 #[test]
+fn sync_help_explains_when_to_use_sync_and_what_to_run_next() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    let help = root
+        .find_subcommand_mut("sync")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+
+    assert!(
+        help.contains("Use this when you want to rebuild from what this repo already declares")
+    );
+    assert!(help.contains("Run `nodus doctor` next"));
+    assert!(help.contains("Common options"));
+}
+
+#[test]
 fn review_help_describes_arguments() {
     let mut root = <Cli as clap::CommandFactory>::command();
     let help = root
@@ -721,6 +768,21 @@ fn read_only_help_mentions_json() {
             "{name} help missing JSON description"
         );
     }
+}
+
+#[test]
+fn doctor_help_describes_default_check_force_modes() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    let help = root
+        .find_subcommand_mut("doctor")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+
+    assert!(help.contains("If Nodus feels broken, start here"));
+    assert!(help.contains("checks and auto-fixes safe issues"));
+    assert!(help.contains("--check"));
+    assert!(help.contains("--force"));
 }
 
 #[test]
@@ -767,6 +829,20 @@ fn update_help_distinguishes_itself_from_sync() {
     assert!(help.contains("Resolve newer allowed versions for configured dependencies"));
     assert!(help.contains("Use `nodus update` when you want newer package revisions"));
     assert!(help.contains("Use `nodus sync` when you only want to rebuild"));
+}
+
+#[test]
+fn update_help_explains_when_to_use_update_and_what_to_run_next() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    let help = root
+        .find_subcommand_mut("update")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+
+    assert!(help.contains("Use this when you want to upgrade what this repo already declares"));
+    assert!(help.contains("Run `nodus doctor` next"));
+    assert!(help.contains("Common options"));
 }
 
 #[test]
@@ -1558,7 +1634,15 @@ fn doctor_command_emits_checking_and_finished_lines() {
     )
     .unwrap();
 
-    let output = run_command_output(Command::Doctor { json: false }, temp.path(), cache.path());
+    let output = run_command_output(
+        Command::Doctor {
+            check: false,
+            force: false,
+            json: false,
+        },
+        temp.path(),
+        cache.path(),
+    );
 
     assert!(output.contains("Checking"));
     assert!(output.contains("Finished"));
@@ -1584,7 +1668,15 @@ fn doctor_command_emits_json_without_status_lines() {
     )
     .unwrap();
 
-    let output = run_command_output(Command::Doctor { json: true }, temp.path(), cache.path());
+    let output = run_command_output(
+        Command::Doctor {
+            check: false,
+            force: false,
+            json: true,
+        },
+        temp.path(),
+        cache.path(),
+    );
 
     let json: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(json["package_count"], 1);

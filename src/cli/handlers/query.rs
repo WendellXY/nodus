@@ -11,6 +11,12 @@ pub(crate) struct ReviewCommand {
     pub(crate) model: Option<String>,
 }
 
+pub(crate) struct DoctorCommand {
+    pub(crate) check: bool,
+    pub(crate) force: bool,
+    pub(crate) json: bool,
+}
+
 pub(crate) fn handle_list(context: &CommandContext<'_>, json: bool) -> anyhow::Result<()> {
     if json {
         write_json(
@@ -110,7 +116,12 @@ pub(crate) fn handle_outdated(context: &CommandContext<'_>, json: bool) -> anyho
     }
 }
 
-pub(crate) fn handle_doctor(context: &CommandContext<'_>, json: bool) -> anyhow::Result<()> {
+pub(crate) fn handle_doctor(
+    context: &CommandContext<'_>,
+    command: DoctorCommand,
+) -> anyhow::Result<()> {
+    let DoctorCommand { check, force, json } = command;
+    let _ = (check, force);
     if json {
         let summary =
             crate::resolver::doctor_in_dir(context.cwd, context.cache_root, &Reporter::silent())?;
