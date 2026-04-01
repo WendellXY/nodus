@@ -248,6 +248,7 @@ pub(super) fn enforce_capabilities(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(super) fn doctor_in_dir(
     cwd: &Path,
     cache_root: &Path,
@@ -319,9 +320,13 @@ pub(super) fn doctor_in_dir(
     Ok(DoctorSummary {
         package_count: resolution.packages.len(),
         warnings,
+        status: super::DoctorStatus::Healthy,
+        findings: Vec::new(),
+        applied_actions: Vec::new(),
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn validate_collisions(
     planned_files: &[ManagedFile],
     owned_paths: &HashSet<PathBuf>,

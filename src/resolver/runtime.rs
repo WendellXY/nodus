@@ -1,3 +1,4 @@
+mod doctor;
 mod resolve;
 mod support;
 
@@ -5,8 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
-use serde::Serialize;
-
+pub use self::doctor::{
+    DoctorActionRecord, DoctorFinding, DoctorFindingKind, DoctorMode, DoctorStatus,
+    DoctorSummary, doctor_in_dir_with_mode,
+};
 use self::resolve::{resolve_project, validate_git_package};
 use self::support::{
     build_sync_execution_plan, enforce_capabilities, execute_sync_plan, find_managed_collision,
@@ -85,12 +88,6 @@ pub struct SyncSummary {
     pub package_count: usize,
     pub adapters: Vec<Adapter>,
     pub managed_file_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DoctorSummary {
-    pub package_count: usize,
-    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -734,7 +731,7 @@ pub fn resolve_project_for_sync(
 }
 
 pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Result<DoctorSummary> {
-    support::doctor_in_dir(cwd, cache_root, reporter)
+    doctor::doctor_in_dir_with_mode(cwd, cache_root, DoctorMode::Repair, reporter)
 }
 
 pub fn resolve_project_from_existing_lockfile_in_dir(

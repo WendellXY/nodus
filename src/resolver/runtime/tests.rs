@@ -541,6 +541,15 @@ fn doctor_in_dir(cwd: &Path, cache_root: &Path) -> Result<DoctorSummary> {
     super::doctor_in_dir(cwd, cache_root, &reporter)
 }
 
+fn doctor_in_dir_with_mode(
+    cwd: &Path,
+    cache_root: &Path,
+    mode: DoctorMode,
+    reporter: &Reporter,
+) -> Result<DoctorSummary> {
+    super::doctor_in_dir_with_mode(cwd, cache_root, mode, reporter)
+}
+
 fn resolve_project_from_existing_lockfile_in_dir(
     cwd: &Path,
     cache_root: &Path,
@@ -6189,6 +6198,66 @@ shared = { path = "vendor/shared" }
         .unwrap_err()
         .to_string();
     assert!(error.contains("managed file is missing from disk"));
+}
+
+#[test]
+fn doctor_check_mode_reports_read_only_status() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    sync_all(temp.path(), cache.path());
+
+    let summary = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Check,
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    assert_eq!(summary.status, DoctorStatus::Healthy);
+    assert!(summary.applied_actions.is_empty());
+}
+
+#[test]
+fn doctor_check_mode_keeps_missing_managed_file_as_unfixed_finding() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    sync_all(temp.path(), cache.path());
+    let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let dependency = resolution
+        .packages
+        .iter()
+        .find(|package| package.alias == "shared")
+        .unwrap();
+    let managed_skill_id = namespaced_skill_id(dependency, "review");
+    fs::remove_file(
+        temp.path()
+            .join(format!(".claude/skills/{managed_skill_id}/SKILL.md")),
+    )
+    .unwrap();
+
+    let summary = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Check,
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    assert_eq!(summary.status, DoctorStatus::Blocked);
+    assert!(summary.findings.iter().any(|finding| {
+        finding.kind == DoctorFindingKind::SafeAutoFix
+            && finding.message.contains("managed file is missing from disk")
+    }));
 }
 
 #[test]
