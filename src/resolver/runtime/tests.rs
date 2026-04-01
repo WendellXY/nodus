@@ -6142,6 +6142,81 @@ fn doctor_repairs_invalid_managed_mcp_json_when_it_owns_the_file() {
 }
 
 #[test]
+fn doctor_missing_lockfile_with_unmanaged_collision_still_blocks_repair() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+
+    fs::remove_file(temp.path().join(LOCKFILE_NAME)).unwrap();
+    fs::remove_dir_all(temp.path().join(".codex/skills")).unwrap();
+    write_file(
+        &temp.path().join(".codex/skills"),
+        "user-owned blocking file\n",
+    );
+
+    let error = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Repair,
+        &Reporter::silent(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("refusing to overwrite unmanaged file"));
+    assert!(error.contains(".codex/skills"));
+    assert!(!temp.path().join(LOCKFILE_NAME).exists());
+}
+
+#[test]
+fn doctor_repairs_owned_invalid_mcp_json_even_without_lockfile() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        "[dependencies.firebase]\npath = \"vendor/firebase\"\n",
+    );
+    write_file(
+        &temp.path().join("vendor/firebase/nodus.toml"),
+        "[mcp_servers.firebase]\ncommand = \"npx\"\n",
+    );
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+
+    fs::remove_file(temp.path().join(LOCKFILE_NAME)).unwrap();
+    write_file(&temp.path().join(".mcp.json"), "{");
+
+    let summary = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Repair,
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    assert_eq!(summary.status, DoctorStatus::Fixed);
+    assert!(temp.path().join(LOCKFILE_NAME).exists());
+    assert!(summary.applied_actions.iter().any(|action| {
+        action
+            .message
+            .contains("rewrote managed outputs and regenerated nodus.lock")
+    }));
+    let mcp_config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".mcp.json")).unwrap()).unwrap();
+    assert_eq!(
+        mcp_config["mcpServers"]["firebase__firebase"]["command"].as_str(),
+        Some("npx")
+    );
+}
+
+#[test]
 fn doctor_force_mode_reports_not_implemented_yet() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

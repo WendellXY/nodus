@@ -152,7 +152,11 @@ fn inspect_doctor_state(
     } else {
         None
     };
+    let desired_paths = resolution.managed_paths(cwd, selected_adapters)?;
     let mut owned_paths = load_owned_paths(cwd, existing_lockfile.as_ref())?;
+    if existing_lockfile.is_none() {
+        owned_paths.extend(recover_runtime_owned_paths(cwd, &desired_paths));
+    }
     let mut invalid_owned_outputs = Vec::new();
     let output_plan = match build_output_plan(
         cwd,
@@ -176,10 +180,6 @@ fn inspect_doctor_state(
             )?
         }
     };
-    let desired_paths = resolution.managed_paths(cwd, selected_adapters)?;
-    if existing_lockfile.is_none() {
-        owned_paths.extend(recover_runtime_owned_paths(cwd, &desired_paths));
-    }
     let mut warnings = resolution
         .warnings
         .iter()
@@ -240,7 +240,15 @@ fn inspect_lockfile_state(
     desired_paths: &std::collections::HashSet<std::path::PathBuf>,
     findings: &mut Vec<DoctorFinding>,
 ) -> Result<bool> {
-    let Some(existing_lockfile) = existing_lockfile else {
+    if let Some(existing_lockfile) = existing_lockfile {
+        let expected_lockfile = resolution.to_lockfile(selected_adapters, cwd)?;
+        if *existing_lockfile != expected_lockfile {
+            findings.push(DoctorFinding {
+                kind: DoctorFindingKind::SafeAutoFix,
+                message: lockfile_out_of_date_message(),
+            });
+        }
+    } else {
         findings.push(DoctorFinding {
             kind: DoctorFindingKind::SafeAutoFix,
             message: format!(
@@ -248,16 +256,7 @@ fn inspect_lockfile_state(
                 lockfile_path.file_name().unwrap().to_string_lossy()
             ),
         });
-        return Ok(false);
     };
-
-    let expected_lockfile = resolution.to_lockfile(selected_adapters, cwd)?;
-    if *existing_lockfile != expected_lockfile {
-        findings.push(DoctorFinding {
-            kind: DoctorFindingKind::SafeAutoFix,
-            message: lockfile_out_of_date_message(),
-        });
-    }
 
     if let Some(collision) = find_unmanaged_collision(planned_files, &owned_paths, cwd) {
         let message =
@@ -361,7 +360,12 @@ fn execute_doctor_plan(
                 });
             }
 
-            if let Some(finding) = plan.findings.first() {
+            if let Some(finding) = plan
+                .findings
+                .iter()
+                .find(|finding| !matches!(finding.kind, DoctorFindingKind::SafeAutoFix))
+                .or_else(|| plan.findings.first())
+            {
                 bail!("{}", finding.message);
             }
 

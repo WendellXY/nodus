@@ -572,6 +572,9 @@ fn is_runtime_managed_path(project_root: &Path, path: &Path) -> bool {
     let Some(relative) = strip_path_prefix(path, project_root) else {
         return false;
     };
+    if relative == Path::new(".mcp.json") {
+        return true;
+    }
     let mut components = relative.components();
     let Some(first) = components.next() else {
         return false;
