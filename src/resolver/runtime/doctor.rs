@@ -96,6 +96,23 @@ struct DoctorInspection {
     risky_actions: Vec<DoctorAction>,
 }
 
+struct LockfileInspection<'a> {
+    cwd: &'a Path,
+    resolution: &'a Resolution,
+    selected_adapters: Adapters,
+    lockfile_path: &'a Path,
+    existing_lockfile: Option<&'a Lockfile>,
+    owned_paths: &'a HashSet<PathBuf>,
+    planned_files: &'a [ManagedFile],
+    desired_paths: &'a HashSet<PathBuf>,
+}
+
+struct LockfileInspectionResult {
+    findings: Vec<DoctorFinding>,
+    risky_actions: Vec<DoctorAction>,
+    has_missing_managed_files: bool,
+}
+
 #[derive(Debug, Clone)]
 struct DoctorPlan {
     package_count: usize,
@@ -222,25 +239,22 @@ fn inspect_doctor_state(
     warnings.sort();
     warnings.dedup();
 
-    let mut findings = Vec::new();
-    let mut risky_actions = Vec::new();
-    let has_missing_managed_files = inspect_lockfile_state(
+    let lockfile_inspection = LockfileInspection {
         cwd,
-        &resolution,
+        resolution: &resolution,
         selected_adapters,
-        &lockfile_path,
-        existing_lockfile.as_ref(),
-        &owned_paths,
-        &planned_files,
-        &desired_paths,
-        &mut findings,
-        &mut risky_actions,
-    )?;
+        lockfile_path: &lockfile_path,
+        existing_lockfile: existing_lockfile.as_ref(),
+        owned_paths: &owned_paths,
+        planned_files: &planned_files,
+        desired_paths: &desired_paths,
+    }
+    .inspect()?;
 
     let mut inspection = DoctorInspection {
         package_count: resolution.packages.len(),
         warnings,
-        findings,
+        findings: lockfile_inspection.findings,
         original_root: root.clone(),
         working_root: root,
         lockfile_path,
@@ -255,9 +269,9 @@ fn inspect_doctor_state(
             managed_file_count,
         },
         has_existing_lockfile: existing_lockfile.is_some(),
-        has_missing_managed_files,
+        has_missing_managed_files: lockfile_inspection.has_missing_managed_files,
         invalid_owned_outputs,
-        risky_actions,
+        risky_actions: lockfile_inspection.risky_actions,
     };
     let mut drift_findings = Vec::new();
     classify_output_drift(&inspection, &mut drift_findings);
@@ -265,84 +279,91 @@ fn inspect_doctor_state(
     Ok(inspection)
 }
 
-fn inspect_lockfile_state(
-    cwd: &Path,
-    resolution: &Resolution,
-    selected_adapters: Adapters,
-    lockfile_path: &Path,
-    existing_lockfile: Option<&Lockfile>,
-    owned_paths: &HashSet<PathBuf>,
-    planned_files: &[crate::adapters::ManagedFile],
-    desired_paths: &std::collections::HashSet<std::path::PathBuf>,
-    findings: &mut Vec<DoctorFinding>,
-    risky_actions: &mut Vec<DoctorAction>,
-) -> Result<bool> {
-    if let Some(existing_lockfile) = existing_lockfile {
-        let expected_lockfile = resolution.to_lockfile(selected_adapters, cwd)?;
-        if *existing_lockfile != expected_lockfile {
+impl LockfileInspection<'_> {
+    fn inspect(&self) -> Result<LockfileInspectionResult> {
+        let mut findings = Vec::new();
+        let mut risky_actions = Vec::new();
+        let mut has_missing_managed_files = false;
+
+        if let Some(existing_lockfile) = self.existing_lockfile {
+            let expected_lockfile = self
+                .resolution
+                .to_lockfile(self.selected_adapters, self.cwd)?;
+            if *existing_lockfile != expected_lockfile {
+                findings.push(DoctorFinding {
+                    kind: DoctorFindingKind::SafeAutoFix,
+                    message: lockfile_out_of_date_message(),
+                });
+            }
+        } else {
             findings.push(DoctorFinding {
                 kind: DoctorFindingKind::SafeAutoFix,
-                message: lockfile_out_of_date_message(),
+                message: format!(
+                    "missing {}",
+                    self.lockfile_path.file_name().unwrap().to_string_lossy()
+                ),
             });
         }
-    } else {
-        findings.push(DoctorFinding {
-            kind: DoctorFindingKind::SafeAutoFix,
-            message: format!(
-                "missing {}",
-                lockfile_path.file_name().unwrap().to_string_lossy()
-            ),
-        });
-    };
 
-    if let Some(collision) = find_unmanaged_collision(planned_files, &owned_paths, cwd) {
-        let message =
-            if let Some(managed_collision) = find_managed_collision(cwd, resolution, &collision) {
-                unmanaged_collision_guidance(cwd, &managed_collision, SyncMode::Normal)
+        if let Some(collision) =
+            find_unmanaged_collision(self.planned_files, self.owned_paths, self.cwd)
+        {
+            let message = if let Some(managed_collision) =
+                find_managed_collision(self.cwd, self.resolution, &collision)
+            {
+                unmanaged_collision_guidance(self.cwd, &managed_collision, SyncMode::Normal)
             } else {
                 format!(
                     "refusing to overwrite unmanaged file {}",
                     crate::paths::display_path(&collision.path)
                 )
             };
-        findings.push(DoctorFinding {
-            kind: DoctorFindingKind::RiskyFix,
-            message: message.clone(),
-        });
-        risky_actions.push(DoctorAction::RemoveConflictingManagedPath {
-            path: collision.path,
-            reason: message,
-        });
-    }
-    if existing_lockfile.is_none() {
-        if let Some(mcp_path) =
-            unmanaged_missing_lockfile_mcp_collision(cwd, owned_paths, planned_files)
-        {
-            let message = format!(
-                "refusing to overwrite unmanaged file {}",
-                display_path(&mcp_path)
-            );
             findings.push(DoctorFinding {
                 kind: DoctorFindingKind::RiskyFix,
                 message: message.clone(),
             });
             risky_actions.push(DoctorAction::RemoveConflictingManagedPath {
-                path: mcp_path,
+                path: collision.path,
                 reason: message,
             });
         }
-    }
-
-    let mut has_missing_managed_files = false;
-    if let Err(error) = validate_state_consistency(&owned_paths, desired_paths, planned_files) {
-        let message = error.to_string();
-        if message.starts_with("managed file is missing from disk") {
-            has_missing_managed_files = true;
+        if self.existing_lockfile.is_none() {
+            if let Some(mcp_path) = unmanaged_missing_lockfile_mcp_collision(
+                self.cwd,
+                self.owned_paths,
+                self.planned_files,
+            ) {
+                let message = format!(
+                    "refusing to overwrite unmanaged file {}",
+                    display_path(&mcp_path)
+                );
+                findings.push(DoctorFinding {
+                    kind: DoctorFindingKind::RiskyFix,
+                    message: message.clone(),
+                });
+                risky_actions.push(DoctorAction::RemoveConflictingManagedPath {
+                    path: mcp_path,
+                    reason: message,
+                });
+            }
         }
-        findings.push(classify_state_consistency_finding(message));
-    }
 
-    Ok(has_missing_managed_files)
+        if let Err(error) =
+            validate_state_consistency(self.owned_paths, self.desired_paths, self.planned_files)
+        {
+            let message = error.to_string();
+            if message.starts_with("managed file is missing from disk") {
+                has_missing_managed_files = true;
+            }
+            findings.push(classify_state_consistency_finding(message));
+        }
+
+        Ok(LockfileInspectionResult {
+            findings,
+            risky_actions,
+            has_missing_managed_files,
+        })
+    }
 }
 
 fn classify_state_consistency_finding(message: String) -> DoctorFinding {

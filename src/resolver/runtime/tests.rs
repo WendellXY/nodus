@@ -553,7 +553,7 @@ fn sync_in_dir_with_collision_choice(
 
 fn doctor_in_dir(cwd: &Path, cache_root: &Path) -> Result<DoctorSummary> {
     let reporter = Reporter::silent();
-    super::doctor_in_dir(cwd, cache_root, &reporter)
+    super::doctor_in_dir_with_mode(cwd, cache_root, DoctorMode::Repair, &reporter)
 }
 
 fn doctor_in_dir_with_mode(

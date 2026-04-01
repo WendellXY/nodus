@@ -5,10 +5,9 @@ mod support;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
 pub use self::doctor::{
-    DoctorActionRecord, DoctorFinding, DoctorFindingKind, DoctorMode, DoctorStatus,
-    DoctorSummary, doctor_in_dir_with_mode,
+    DoctorActionRecord, DoctorFinding, DoctorFindingKind, DoctorMode, DoctorStatus, DoctorSummary,
+    doctor_in_dir_with_mode,
 };
 use self::resolve::resolve_project;
 use self::support::{
@@ -32,6 +31,7 @@ use crate::selection::{
     resolve_adapter_selection, resolve_global_adapter_selection, should_prompt_for_adapter,
 };
 use crate::store::{SnapshotSource, snapshot_packages};
+use anyhow::{Result, bail};
 #[cfg(test)]
 use std::fs;
 
@@ -728,10 +728,6 @@ pub fn resolve_project_for_sync(
     reporter: &Reporter,
 ) -> Result<Resolution> {
     resolve_project(root, cache_root, ResolveMode::Sync, reporter, None, None)
-}
-
-pub fn doctor_in_dir(cwd: &Path, cache_root: &Path, reporter: &Reporter) -> Result<DoctorSummary> {
-    doctor::doctor_in_dir_with_mode(cwd, cache_root, DoctorMode::Repair, reporter)
 }
 
 pub fn resolve_project_from_existing_lockfile_in_dir(
