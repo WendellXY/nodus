@@ -1,6 +1,7 @@
 mod args;
 mod entry;
 mod handlers;
+mod help;
 mod output;
 mod router;
 #[cfg(test)]

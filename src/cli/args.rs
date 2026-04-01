@@ -4,44 +4,13 @@ use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
 use crate::adapters::Adapter;
+use crate::cli::help::{
+    ADD_AFTER_LONG_HELP, ADD_LONG_ABOUT, DOCTOR_AFTER_LONG_HELP, DOCTOR_LONG_ABOUT,
+    ROOT_AFTER_LONG_HELP, ROOT_LONG_ABOUT, SYNC_AFTER_LONG_HELP, SYNC_LONG_ABOUT,
+    UPDATE_AFTER_LONG_HELP, UPDATE_LONG_ABOUT,
+};
 use crate::manifest::DependencyComponent;
 use crate::review::ReviewProvider;
-
-const ROOT_LONG_ABOUT: &str = r#"Nodus installs agent packages from GitHub, Git URLs, or local paths, locks the exact revision you resolved, and writes only the adapter runtime files your repo actually uses.
-
-For most repos, the normal flow is:
-  1. `nodus add <package> --adapter <adapter>`
-  2. `nodus doctor`
-  3. Use `nodus sync` or `nodus update` as the package changes over time
-"#;
-
-const ROOT_AFTER_LONG_HELP: &str = r#"Examples:
-  nodus add nodus-rs/nodus --adapter codex
-  nodus info nodus-rs/nodus
-  nodus sync --locked
-
-Project-scoped installs are the default. Use `--global` on `nodus add` or `nodus remove` when you want user-level state instead of repo state.
-
-Use `nodus <command> --help` for examples and flag details."#;
-
-const ADD_LONG_ABOUT: &str = r#"Add a package to the current repo and immediately sync the managed outputs for the selected adapters.
-
-`<PACKAGE>` can be:
-  - a GitHub shortcut like `owner/repo`
-  - a full Git URL
-  - a local path
-
-By default Nodus installs the whole package. Wrapper packages that expose multiple child packages are added with no child packages enabled until you select `members` manually or pass `--accept-all-dependencies`."#;
-
-const ADD_AFTER_LONG_HELP: &str = r#"Examples:
-  nodus add nodus-rs/nodus --adapter codex
-  nodus add ./vendor/playbook --adapter claude
-  nodus add owner/repo --tag v1.2.3 --adapter codex
-  nodus add owner/marketplace --accept-all-dependencies --adapter codex
-  nodus add owner/repo --global --adapter codex
-
-After a project-scoped install, run `nodus doctor` to confirm the repo is consistent."#;
-
 const REMOVE_LONG_ABOUT: &str = r#"Remove a configured dependency, update `nodus.toml`, and prune the runtime files that dependency no longer owns."#;
 
 const REMOVE_AFTER_LONG_HELP: &str = r#"Examples:
@@ -71,15 +40,6 @@ const OUTDATED_AFTER_LONG_HELP: &str = r#"Examples:
   nodus outdated
   nodus outdated --json"#;
 
-const UPDATE_LONG_ABOUT: &str = r#"Resolve newer allowed versions for configured dependencies, rewrite `nodus.lock`, and sync managed outputs to match the new result.
-
-Use `nodus update` when you want newer package revisions. Use `nodus sync` when you only want to rebuild from the versions you already have recorded."#;
-
-const UPDATE_AFTER_LONG_HELP: &str = r#"Examples:
-  nodus update
-  nodus update --dry-run
-  nodus update --allow-high-sensitivity"#;
-
 const UPGRADE_LONG_ABOUT: &str = r#"Check whether the installed `nodus` CLI can be upgraded, or install the newer version when the current install method supports that workflow."#;
 
 const UPGRADE_AFTER_LONG_HELP: &str = r#"Examples:
@@ -101,18 +61,6 @@ const INIT_AFTER_LONG_HELP: &str = r#"Examples:
   nodus init
   nodus init --dry-run"#;
 
-const SYNC_LONG_ABOUT: &str = r#"Resolve the dependencies already declared in `nodus.toml` and write the managed adapter outputs that should exist for the current repo.
-
-Use `nodus sync` after manifest changes, after editing package content locally, or when you want to rebuild outputs without upgrading dependencies."#;
-
-const SYNC_AFTER_LONG_HELP: &str = r#"Examples:
-  nodus sync
-  nodus sync --locked
-  nodus sync --frozen
-  nodus sync --force
-
-Use `--locked` when the lockfile must stay unchanged. Use `--frozen` when installs must come exactly from the existing `nodus.lock`."#;
-
 const CLEAN_LONG_ABOUT: &str = r#"Clear shared package cache data without changing `nodus.toml`, `nodus.lock`, or generated runtime outputs.
 
 By default `nodus clean` removes only the cache entries referenced by the current repo's `nodus.lock`. Use `--all` when you want to clear the shared cache directories for every project under the selected store root.
@@ -127,14 +75,6 @@ const CLEAN_AFTER_LONG_HELP: &str = r#"Examples:
 After cleaning the cache, run `nodus sync` again when you want Nodus to recreate the missing mirrors, checkouts, and snapshots."#;
 
 const COMPLETION_LONG_ABOUT: &str = r#"Generate shell completion scripts for `nodus` so the shell can suggest commands and flags interactively."#;
-
-const DOCTOR_LONG_ABOUT: &str = r#"Validate that `nodus.toml`, `nodus.lock`, the shared store, and the managed adapter outputs are still in sync.
-
-Run this after `nodus add`, `nodus sync`, `nodus update`, or `nodus remove` when you want a final health check."#;
-
-const DOCTOR_AFTER_LONG_HELP: &str = r#"Examples:
-  nodus doctor
-  nodus doctor --json"#;
 
 #[derive(Debug, Parser)]
 #[command(

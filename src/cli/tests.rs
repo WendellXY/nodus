@@ -591,37 +591,19 @@ fn rejects_relay_watch_with_dry_run() {
 }
 
 #[test]
-fn root_help_describes_commands() {
+fn root_help_leads_with_guided_workflows() {
     let help = <Cli as clap::CommandFactory>::command()
         .render_long_help()
         .to_string();
 
-    assert!(help.contains("Nodus installs agent packages from GitHub, Git URLs, or local paths"));
-    assert!(help.contains("For most repos, the normal flow is:"));
-    assert!(help.contains("nodus add <package> --adapter <adapter>"));
-    assert!(help.contains("nodus doctor"));
-    assert!(help.contains("Add a dependency and run sync"));
-    assert!(help.contains("List configured dependencies and any locked metadata"));
-    assert!(help.contains("Display resolved package metadata"));
-    assert!(help.contains("Check configured dependencies for newer tags or branch head changes"));
-    assert!(help.contains("Update configured dependencies and resync managed outputs"));
-    assert!(
-        help.contains(
-            "Check for or install a newer nodus CLI when the install method is supported"
-        )
-    );
-    assert!(help.contains("Clear shared repository, checkout, and snapshot cache data"));
-    assert!(help.contains("Generate shell completion scripts"));
-    assert!(
-        help.contains("Use an AI review agent to assess whether a package graph looks safe to use")
-    );
-    assert!(help.contains("Validate lockfile, shared store, and managed output consistency"));
-    assert!(help.contains("Project-scoped installs are the default"));
-    assert!(help.contains("Use `nodus <command> --help` for examples and flag details"));
+    assert!(help.contains("Most common tasks"));
+    assert!(help.contains("Typical workflows"));
+    assert!(help.contains("add -> doctor"));
+    assert!(help.contains("Need details? Run `nodus <command> --help`"));
 }
 
 #[test]
-fn add_help_describes_arguments() {
+fn add_help_leads_with_safe_example_and_next_step() {
     let mut root = <Cli as clap::CommandFactory>::command();
     let help = root
         .find_subcommand_mut("add")
@@ -629,20 +611,10 @@ fn add_help_describes_arguments() {
         .render_long_help()
         .to_string();
 
-    assert!(help.contains("Add a package to the current repo and immediately sync"));
-    assert!(help.contains("<PACKAGE>"));
-    assert!(help.contains("Git URL, local path, or GitHub shortcut like owner/repo"));
-    assert!(help.contains("Record the dependency under `[dev-dependencies]`"));
-    assert!(help.contains("Pin a specific Git tag instead of resolving the latest tag"));
-    assert!(help.contains("Track a specific Git branch instead of resolving the latest tag"));
-    assert!(help.contains("Pin a specific Git commit revision"));
-    assert!(help.contains("Install into user-level global state"));
-    assert!(help.contains("Select one or more adapters to persist for this install target"));
-    assert!(help.contains("Select which dependency components to install from the package"));
-    assert!(help.contains("Persist project startup hooks"));
-    assert!(help.contains("By default Nodus installs the whole package"));
+    assert!(help.contains("Most common use"));
     assert!(help.contains("nodus add nodus-rs/nodus --adapter codex"));
-    assert!(help.contains("After a project-scoped install, run `nodus doctor`"));
+    assert!(help.contains("What this changes"));
+    assert!(help.contains("Run `nodus doctor` next"));
 }
 
 #[test]
