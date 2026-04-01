@@ -576,12 +576,17 @@ pub(super) fn recover_runtime_owned_paths_from_disk(
     desired_paths
         .iter()
         .filter(|path| is_runtime_managed_path(project_root, path))
-        .filter(|path| path_exactly_matches_planned_files(path, planned_files))
+        .filter(|path| !path_has_symlinked_ancestor_within(project_root, path))
+        .filter(|path| path_exactly_matches_planned_files(project_root, path, planned_files))
         .cloned()
         .collect()
 }
 
-fn path_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]) -> bool {
+fn path_exactly_matches_planned_files(
+    project_root: &Path,
+    path: &Path,
+    planned_files: &[ManagedFile],
+) -> bool {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
     };
@@ -593,17 +598,22 @@ fn path_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]
             .iter()
             .find(|file| file.path == path)
             .is_some_and(|file| {
-                file_exactly_matches_planned_contents(file)
-                    && parent_directory_exactly_matches_when_multi_file(file, planned_files)
+                file_exactly_matches_planned_contents(project_root, file)
+                    && parent_directory_exactly_matches_when_multi_file(
+                        project_root,
+                        file,
+                        planned_files,
+                    )
             });
     }
     if metadata.is_dir() {
-        return directory_exactly_matches_planned_files(path, planned_files);
+        return directory_exactly_matches_planned_files(project_root, path, planned_files);
     }
     false
 }
 
 fn parent_directory_exactly_matches_when_multi_file(
+    project_root: &Path,
     file: &ManagedFile,
     planned_files: &[ManagedFile],
 ) -> bool {
@@ -614,10 +624,14 @@ fn parent_directory_exactly_matches_when_multi_file(
         .iter()
         .filter(|candidate| candidate.path.parent() == Some(parent))
         .count();
-    sibling_count <= 1 || directory_exactly_matches_planned_files(parent, planned_files)
+    sibling_count <= 1
+        || directory_exactly_matches_planned_files(project_root, parent, planned_files)
 }
 
-fn file_exactly_matches_planned_contents(file: &ManagedFile) -> bool {
+fn file_exactly_matches_planned_contents(project_root: &Path, file: &ManagedFile) -> bool {
+    if path_has_symlinked_ancestor_within(project_root, &file.path) {
+        return false;
+    }
     fs::symlink_metadata(&file.path)
         .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
         .unwrap_or(false)
@@ -626,7 +640,11 @@ fn file_exactly_matches_planned_contents(file: &ManagedFile) -> bool {
             .unwrap_or(false)
 }
 
-fn directory_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]) -> bool {
+fn directory_exactly_matches_planned_files(
+    project_root: &Path,
+    path: &Path,
+    planned_files: &[ManagedFile],
+) -> bool {
     let planned_in_dir = planned_files
         .iter()
         .filter(|file| file.path.starts_with(path))
@@ -638,7 +656,7 @@ fn directory_exactly_matches_planned_files(path: &Path, planned_files: &[Managed
     if !planned_in_dir
         .iter()
         .copied()
-        .all(file_exactly_matches_planned_contents)
+        .all(|file| file_exactly_matches_planned_contents(project_root, file))
     {
         return false;
     }
@@ -657,13 +675,16 @@ fn directory_exactly_matches_planned_files(path: &Path, planned_files: &[Managed
         .into_iter()
         .chain(expected_dirs)
         .collect::<HashSet<_>>();
-    let Ok(existing_entries) = collect_entries_under_dir(path) else {
+    let Ok(existing_entries) = collect_entries_under_dir(project_root, path) else {
         return false;
     };
     existing_entries == expected_entries
 }
 
-fn collect_entries_under_dir(path: &Path) -> Result<HashSet<PathBuf>> {
+fn collect_entries_under_dir(project_root: &Path, path: &Path) -> Result<HashSet<PathBuf>> {
+    if path_has_symlinked_ancestor_within(project_root, path) {
+        return Ok(HashSet::new());
+    }
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("failed to read metadata for {}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -698,6 +719,17 @@ fn collect_entries_under_dir(path: &Path) -> Result<HashSet<PathBuf>> {
     }
 
     Ok(entries)
+}
+
+fn path_has_symlinked_ancestor_within(project_root: &Path, path: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .take_while(|ancestor| ancestor.starts_with(project_root) && *ancestor != project_root)
+        .any(|ancestor| {
+            fs::symlink_metadata(ancestor)
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false)
+        })
 }
 
 fn is_runtime_managed_path(project_root: &Path, path: &Path) -> bool {

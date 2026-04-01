@@ -5816,6 +5816,35 @@ fn recover_runtime_owned_paths_from_disk_rejects_symlinked_candidates() {
 }
 
 #[test]
+fn recover_runtime_owned_paths_from_disk_rejects_candidates_under_symlinked_parents() {
+    let temp = TempDir::new().unwrap();
+    let project_root = temp.path();
+
+    let real_dir = project_root.join("real-learnings");
+    write_file(&real_dir.join("review.md"), "Use the learning pack.\n");
+    let symlinked_parent = project_root.join(".nodus/packages/shared/learnings");
+    fs::create_dir_all(symlinked_parent.parent().unwrap()).unwrap();
+    if !create_symlink(&real_dir, &symlinked_parent) {
+        return;
+    }
+
+    let managed_file = symlinked_parent.join("review.md");
+    let desired_paths = [managed_file.clone()].into_iter().collect::<HashSet<_>>();
+    let planned_files = vec![ManagedFile {
+        path: managed_file.clone(),
+        contents: b"Use the learning pack.\n".to_vec(),
+    }];
+
+    let recovered = super::support::recover_runtime_owned_paths_from_disk(
+        project_root,
+        &desired_paths,
+        &planned_files,
+    );
+
+    assert!(!recovered.contains(&managed_file));
+}
+
+#[test]
 fn recover_runtime_owned_paths_from_disk_accepts_exact_package_export_directories() {
     let temp = TempDir::new().unwrap();
     let project_root = temp.path();
@@ -6540,6 +6569,59 @@ target = "learnings/review.md"
     assert!(error.contains("refusing to overwrite unmanaged file"));
     assert!(!temp.path().join(LOCKFILE_NAME).exists());
     assert!(fs::symlink_metadata(&managed_path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false));
+}
+
+#[test]
+fn doctor_missing_lockfile_with_managed_file_under_symlinked_parent_blocks_repair() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.shared]
+path = "vendor/shared"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/shared"),
+        r#"
+[[managed_exports]]
+source = "learnings/review.md"
+target = "learnings/review.md"
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join("vendor/shared/learnings/review.md"),
+        "Use the learning pack.\n",
+    );
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+    fs::remove_file(temp.path().join(LOCKFILE_NAME)).unwrap();
+    fs::remove_dir_all(temp.path().join(".codex")).unwrap();
+
+    let real_dir = temp.path().join("real-learnings");
+    write_file(&real_dir.join("review.md"), "Use the learning pack.\n");
+    let managed_parent = temp.path().join(".nodus/packages/shared/learnings");
+    fs::remove_dir_all(&managed_parent).unwrap();
+    if !create_symlink(&real_dir, &managed_parent) {
+        return;
+    }
+
+    let error = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Repair,
+        &Reporter::silent(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("refusing to overwrite unmanaged file"));
+    assert!(!temp.path().join(LOCKFILE_NAME).exists());
+    assert!(fs::symlink_metadata(&managed_parent)
         .map(|metadata| metadata.file_type().is_symlink())
         .unwrap_or(false));
 }
