@@ -577,17 +577,65 @@ pub(super) fn recover_runtime_owned_dirs_from_disk(
         .iter()
         .filter(|path| is_runtime_managed_path(project_root, path))
         .filter(|path| path.is_dir())
-        .filter(|path| {
-            planned_files.iter().any(|file| {
-                file.path.starts_with(path)
-                    && file.path.is_file()
-                    && fs::read(&file.path)
-                        .map(|contents| contents == file.contents)
-                        .unwrap_or(false)
-            })
-        })
+        .filter(|path| directory_exactly_matches_planned_files(path, planned_files))
         .cloned()
         .collect()
+}
+
+fn directory_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]) -> bool {
+    let planned_in_dir = planned_files
+        .iter()
+        .filter(|file| file.path.starts_with(path))
+        .collect::<Vec<_>>();
+    if planned_in_dir.is_empty() {
+        return false;
+    }
+
+    if !planned_in_dir.iter().all(|file| {
+        file.path.is_file()
+            && fs::read(&file.path)
+                .map(|contents| contents == file.contents)
+                .unwrap_or(false)
+    }) {
+        return false;
+    }
+
+    let expected_files = planned_in_dir
+        .iter()
+        .map(|file| file.path.clone())
+        .collect::<HashSet<_>>();
+    let Ok(existing_files) = collect_files_under_dir(path) else {
+        return false;
+    };
+    existing_files == expected_files
+}
+
+fn collect_files_under_dir(path: &Path) -> Result<HashSet<PathBuf>> {
+    let mut files = HashSet::new();
+    let mut pending = vec![path.to_path_buf()];
+
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(&current)
+            .with_context(|| format!("failed to read managed directory {}", current.display()))?
+        {
+            let entry = entry.with_context(|| {
+                format!("failed to inspect managed directory {}", current.display())
+            })?;
+            let entry_path = entry.path();
+            let metadata = entry
+                .metadata()
+                .with_context(|| format!("failed to read metadata for {}", entry_path.display()))?;
+            if metadata.is_dir() {
+                pending.push(entry_path);
+            } else if metadata.is_file() {
+                files.insert(entry_path);
+            } else {
+                return Ok(HashSet::new());
+            }
+        }
+    }
+
+    Ok(files)
 }
 
 fn is_runtime_managed_path(project_root: &Path, path: &Path) -> bool {
