@@ -198,9 +198,9 @@ pub(super) const DOCTOR_ABOUT: &str =
 pub(super) const DOCTOR_LONG_ABOUT: &str = r#"If Nodus feels broken, start here.
 
 Default behavior:
-  - checks the repo state
-  - checks and auto-fixes safe issues
-  - asks before risky cleanup
+  - runs the current read-only doctor check
+  - reports repo consistency problems without changing anything
+  - treats `--check` and `--force` as reserved mode flags for upcoming flows
 
 Validate that `nodus.toml`, `nodus.lock`, the shared store, and the managed adapter outputs are still in sync.
 
@@ -211,6 +211,9 @@ pub(super) const DOCTOR_AFTER_LONG_HELP: &str = r#"Common commands:
   nodus doctor --check
   nodus doctor --force
   nodus doctor --json
+
+Flag note:
+  `--check` and `--force` parse today but do not change doctor behavior yet.
 
 Examples:
   nodus doctor

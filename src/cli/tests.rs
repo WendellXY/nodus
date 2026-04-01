@@ -355,6 +355,13 @@ fn doctor_command_parses_check_and_force_flags() {
 }
 
 #[test]
+fn doctor_command_rejects_check_and_force_together() {
+    let error = Cli::try_parse_from(["nodus", "doctor", "--check", "--force"]).unwrap_err();
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn parses_review_subcommand() {
     let cli = Cli::try_parse_from([
         "nodus",
@@ -780,9 +787,26 @@ fn doctor_help_describes_default_check_force_modes() {
         .to_string();
 
     assert!(help.contains("If Nodus feels broken, start here"));
-    assert!(help.contains("checks and auto-fixes safe issues"));
+    assert!(help.contains("current read-only doctor check"));
+    assert!(help.contains("reserved mode flags"));
+    assert!(help.contains("parse today but do not change doctor behavior yet"));
     assert!(help.contains("--check"));
     assert!(help.contains("--force"));
+}
+
+#[test]
+fn remove_help_describes_scope_and_next_step() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    let help = root
+        .find_subcommand_mut("remove")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+
+    assert!(help.contains("Remove a configured dependency"));
+    assert!(help.contains("Use this when you want to delete a package from the repo"));
+    assert!(help.contains("Run `nodus doctor` next"));
+    assert!(help.contains("Common options"));
 }
 
 #[test]
