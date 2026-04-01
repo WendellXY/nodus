@@ -5645,7 +5645,7 @@ shared = { path = "vendor/shared" }
 }
 
 #[test]
-fn recover_runtime_owned_dirs_from_disk_requires_existing_matching_directory_state() {
+fn recover_runtime_owned_paths_from_disk_requires_existing_matching_directory_state() {
     let temp = TempDir::new().unwrap();
     let project_root = temp.path();
     let skill_dir = project_root.join(".claude/skills/review_abc123");
@@ -5679,7 +5679,7 @@ fn recover_runtime_owned_dirs_from_disk_requires_existing_matching_directory_sta
         },
     ];
 
-    let recovered = super::support::recover_runtime_owned_dirs_from_disk(
+    let recovered = super::support::recover_runtime_owned_paths_from_disk(
         project_root,
         &desired_paths,
         &planned_files,
@@ -5692,7 +5692,7 @@ fn recover_runtime_owned_dirs_from_disk_requires_existing_matching_directory_sta
 }
 
 #[test]
-fn recover_runtime_owned_dirs_from_disk_rejects_partial_directory_matches() {
+fn recover_runtime_owned_paths_from_disk_rejects_partial_directory_matches() {
     let temp = TempDir::new().unwrap();
     let project_root = temp.path();
     let learnings_dir = project_root.join(".nodus/packages/shared/learnings");
@@ -5711,7 +5711,7 @@ fn recover_runtime_owned_dirs_from_disk_rejects_partial_directory_matches() {
         },
     ];
 
-    let recovered = super::support::recover_runtime_owned_dirs_from_disk(
+    let recovered = super::support::recover_runtime_owned_paths_from_disk(
         project_root,
         &desired_paths,
         &planned_files,
@@ -5721,7 +5721,7 @@ fn recover_runtime_owned_dirs_from_disk_rejects_partial_directory_matches() {
 }
 
 #[test]
-fn recover_runtime_owned_dirs_from_disk_accepts_exact_package_export_directories() {
+fn recover_runtime_owned_paths_from_disk_accepts_exact_package_export_directories() {
     let temp = TempDir::new().unwrap();
     let project_root = temp.path();
     let learnings_dir = project_root.join(".nodus/packages/shared/learnings");
@@ -5740,13 +5740,35 @@ fn recover_runtime_owned_dirs_from_disk_accepts_exact_package_export_directories
         },
     ];
 
-    let recovered = super::support::recover_runtime_owned_dirs_from_disk(
+    let recovered = super::support::recover_runtime_owned_paths_from_disk(
         project_root,
         &desired_paths,
         &planned_files,
     );
 
     assert!(recovered.contains(&learnings_dir));
+}
+
+#[test]
+fn recover_runtime_owned_paths_from_disk_accepts_exact_single_file_outputs() {
+    let temp = TempDir::new().unwrap();
+    let project_root = temp.path();
+    let managed_file = project_root.join(".nodus/packages/shared/learnings/review.md");
+    let desired_paths = [managed_file.clone()].into_iter().collect::<HashSet<_>>();
+    write_file(&managed_file, "Use the learning pack.\n");
+
+    let planned_files = vec![ManagedFile {
+        path: managed_file.clone(),
+        contents: b"Use the learning pack.\n".to_vec(),
+    }];
+
+    let recovered = super::support::recover_runtime_owned_paths_from_disk(
+        project_root,
+        &desired_paths,
+        &planned_files,
+    );
+
+    assert!(recovered.contains(&managed_file));
 }
 
 #[test]
@@ -6375,6 +6397,55 @@ target = "learnings"
     assert_eq!(
         fs::read_to_string(temp.path().join(".nodus/packages/shared/learnings/tips.md")).unwrap(),
         "Use the tips pack.\n"
+    );
+}
+
+#[test]
+fn doctor_recovers_exact_match_package_export_file_after_lockfile_loss() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.shared]
+path = "vendor/shared"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/shared"),
+        r#"
+[[managed_exports]]
+source = "learnings/review.md"
+target = "learnings/review.md"
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join("vendor/shared/learnings/review.md"),
+        "Use the learning pack.\n",
+    );
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+    fs::remove_file(temp.path().join(LOCKFILE_NAME)).unwrap();
+    fs::remove_dir_all(temp.path().join(".codex")).unwrap();
+
+    let summary = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Repair,
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    assert_eq!(summary.status, DoctorStatus::Fixed);
+    assert!(temp.path().join(LOCKFILE_NAME).exists());
+    assert_eq!(
+        fs::read_to_string(
+            temp.path()
+                .join(".nodus/packages/shared/learnings/review.md")
+        )
+        .unwrap(),
+        "Use the learning pack.\n"
     );
 }
 

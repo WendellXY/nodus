@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::resolve::{resolve_project, validate_git_package};
 use super::support::{
     build_sync_execution_plan, execute_sync_plan, find_managed_collision, find_unmanaged_collision,
-    load_owned_paths, managed_path_is_owned, recover_runtime_owned_dirs_from_disk,
+    load_owned_paths, managed_path_is_owned, recover_runtime_owned_paths_from_disk,
     unmanaged_collision_guidance, validate_state_consistency,
 };
 use super::{lockfile_out_of_date_message, Resolution, ResolveMode, SyncMode};
@@ -178,7 +178,7 @@ fn inspect_doctor_state(
         }
     };
     if existing_lockfile.is_none() {
-        owned_paths.extend(recover_runtime_owned_dirs_from_disk(
+        owned_paths.extend(recover_runtime_owned_paths_from_disk(
             cwd,
             &desired_paths,
             &output_plan.files,

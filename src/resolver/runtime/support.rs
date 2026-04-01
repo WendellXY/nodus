@@ -568,7 +568,7 @@ pub(super) fn recover_runtime_owned_paths(
         .collect()
 }
 
-pub(super) fn recover_runtime_owned_dirs_from_disk(
+pub(super) fn recover_runtime_owned_paths_from_disk(
     project_root: &Path,
     desired_paths: &HashSet<PathBuf>,
     planned_files: &[ManagedFile],
@@ -576,10 +576,29 @@ pub(super) fn recover_runtime_owned_dirs_from_disk(
     desired_paths
         .iter()
         .filter(|path| is_runtime_managed_path(project_root, path))
-        .filter(|path| path.is_dir())
-        .filter(|path| directory_exactly_matches_planned_files(path, planned_files))
+        .filter(|path| path_exactly_matches_planned_files(path, planned_files))
         .cloned()
         .collect()
+}
+
+fn path_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]) -> bool {
+    if path.is_file() {
+        return planned_files
+            .iter()
+            .find(|file| file.path == path)
+            .is_some_and(file_exactly_matches_planned_contents);
+    }
+    if path.is_dir() {
+        return directory_exactly_matches_planned_files(path, planned_files);
+    }
+    false
+}
+
+fn file_exactly_matches_planned_contents(file: &ManagedFile) -> bool {
+    file.path.is_file()
+        && fs::read(&file.path)
+            .map(|contents| contents == file.contents)
+            .unwrap_or(false)
 }
 
 fn directory_exactly_matches_planned_files(path: &Path, planned_files: &[ManagedFile]) -> bool {
@@ -591,12 +610,11 @@ fn directory_exactly_matches_planned_files(path: &Path, planned_files: &[Managed
         return false;
     }
 
-    if !planned_in_dir.iter().all(|file| {
-        file.path.is_file()
-            && fs::read(&file.path)
-                .map(|contents| contents == file.contents)
-                .unwrap_or(false)
-    }) {
+    if !planned_in_dir
+        .iter()
+        .copied()
+        .all(file_exactly_matches_planned_contents)
+    {
         return false;
     }
 
