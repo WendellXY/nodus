@@ -655,6 +655,13 @@ fn is_runtime_managed_path(project_root: &Path, path: &Path) -> bool {
             components.next().map(|component| component.as_os_str().to_string_lossy()),
             Some(second) if second == "skills" || second == "agents"
         ),
+        ".nodus" => matches!(
+            (
+                components.next().map(|component| component.as_os_str().to_string_lossy()),
+                components.next().map(|component| component.as_os_str().to_string_lossy())
+            ),
+            (Some(second), Some(_third)) if second == "packages"
+        ),
         _ => false,
     }
 }
