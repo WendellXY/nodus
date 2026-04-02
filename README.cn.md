@@ -143,7 +143,8 @@ nodus doctor --help
 - 文档：<https://nodus.elata.ai/docs/>
 - 安装说明：<https://nodus.elata.ai/install/>
 - 包命令生成器：<https://nodus.elata.ai/packages/>
-- manifest 示例：[examples/nodus.toml](./examples/nodus.toml)
+- 使用者 manifest 示例：[examples/nodus.toml](./examples/nodus.toml)
+- 包作者 manifest 示例：[examples/package-author.nodus.toml](./examples/package-author.nodus.toml)
 
 如果你想了解包作者工作流、workspace 包装、managed exports 或 relay 这样的进阶主题，优先看网站文档和 `nodus --help`，而不是把这个 README 当成完整命令手册。
 

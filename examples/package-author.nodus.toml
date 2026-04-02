@@ -1,0 +1,69 @@
+# Example `nodus.toml` for package maintainers
+#
+# This example is for a repo that publishes its own Nodus package content.
+# Maintain the source files in this repo. Nodus will discover them here and
+# emit managed runtime outputs for consuming workspaces.
+#
+# Typical source layout under the package root:
+# - `skills/<id>/SKILL.md`
+# - `agents/<id>.md`
+# - `rules/<id>.*`
+# - `commands/<id>.*`
+
+# Optional manifest version string.
+api_version = "1"
+
+# Recommended package metadata.
+name = "acme-agent-pack"
+version = "0.1.0"
+
+# Publish this repo root during local `nodus sync`.
+# Omit or leave `false` when the root should act only as a source package for
+# downstream consumers and not write into its own adapter runtime folders.
+publish_root = true
+
+# Optional additive package roots relative to the repo root.
+# Nodus always scans the repo root itself, then each configured content root.
+# content_roots = ["packages/shared"]
+
+[[managed_exports]]
+# Package-owned file exported into consuming workspaces.
+# By default this lands under `.nodus/packages/<package-name>/...`.
+source = "prompts/review.md"
+target = "prompts/review.md"
+
+[[managed_exports]]
+# Use project placement only when the package truly needs a project-root path.
+source = "docs/reviewer.md"
+target = "docs/reviewer.md"
+placement = "project"
+
+[[capabilities]]
+# Optional capability declarations for tools or actions this package exposes.
+id = "shell.exec"
+sensitivity = "low"
+justification = "Run repository checks and maintenance commands."
+
+[mcp_servers.firebase]
+# Packages can publish MCP servers directly from `nodus.toml`.
+# Use exactly one of `command` or `url`.
+command = "npx"
+args = ["-y", "firebase-tools", "mcp", "--dir", "."]
+cwd = "."
+
+[mcp_servers.firebase.env]
+IS_FIREBASE_MCP = "true"
+
+# [mcp_servers.figma]
+# URL-backed MCP server example.
+# type = "http"
+# url = "https://example.com/mcp"
+#
+# [mcp_servers.figma.headers]
+# Authorization = "Bearer ${FIGMA_TOKEN}"
+
+# Optional package composition when this package re-exports other packages.
+# [dependencies.shared]
+# github = "acme/shared-prompts"
+# tag = "v1.2.3"
+# components = ["skills"]

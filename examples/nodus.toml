@@ -1,4 +1,4 @@
-# Example `nodus.toml`
+# Example `nodus.toml` for consumers
 #
 # This file is intentionally verbose. It shows the real manifest shape Nodus
 # understands today and explains when to use each field.

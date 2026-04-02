@@ -143,7 +143,8 @@ Commands most users need:
 - Docs: <https://nodus.elata.ai/docs/>
 - Install guide: <https://nodus.elata.ai/install/>
 - Package command generator: <https://nodus.elata.ai/packages/>
-- Example manifest: [examples/nodus.toml](./examples/nodus.toml)
+- Consumer manifest example: [examples/nodus.toml](./examples/nodus.toml)
+- Package author manifest example: [examples/package-author.nodus.toml](./examples/package-author.nodus.toml)
 
 For package authoring details, workspace packaging, managed exports, or relay workflows, prefer the website docs and `nodus --help` over treating this README as the full command reference.
 
