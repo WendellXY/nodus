@@ -5866,7 +5866,7 @@ shared = { path = "vendor/shared" }
 }
 
 #[test]
-fn recover_runtime_owned_paths_from_disk_requires_existing_matching_directory_state() {
+fn recover_runtime_owned_paths_from_disk_requires_existing_matching_path_state() {
     let temp = TempDir::new().unwrap();
     let project_root = temp.path();
     let skill_dir = project_root.join(".claude/skills/review_abc123");
@@ -5908,7 +5908,7 @@ fn recover_runtime_owned_paths_from_disk_requires_existing_matching_directory_st
 
     assert!(recovered.contains(&skill_dir));
     assert!(recovered.contains(&github_skill_dir));
-    assert!(!recovered.contains(&github_agent_file));
+    assert!(recovered.contains(&github_agent_file));
     assert!(!recovered.contains(&prompt_file));
 }
 
