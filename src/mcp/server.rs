@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rust_mcp_sdk::mcp_server::{server_runtime, McpServerOptions, ServerHandler, ServerRuntime};
+use rust_mcp_sdk::mcp_server::{McpServerOptions, ServerHandler, ServerRuntime, server_runtime};
 use rust_mcp_sdk::schema::{
-    schema_utils::CallToolError, CallToolRequestParams, CallToolResult, Implementation,
-    InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion, RpcError,
-    ServerCapabilities, ServerCapabilitiesTools, TextContent, Tool, ToolInputSchema,
+    CallToolRequestParams, CallToolResult, Implementation, InitializeResult, ListToolsResult,
+    PaginatedRequestParams, ProtocolVersion, RpcError, ServerCapabilities, ServerCapabilitiesTools,
+    TextContent, Tool, ToolInputSchema, schema_utils::CallToolError,
 };
 use rust_mcp_sdk::{McpServer, StdioTransport, ToMcpServerHandler, TransportOptions};
 
@@ -24,16 +24,19 @@ impl NodusHandler {
     fn new(cwd: PathBuf, cache_root: PathBuf) -> Self {
         let tools = super::tool_definitions()
             .into_iter()
-            .map(|(name, description)| Tool {
-                name: name.to_string(),
-                description: Some(description.to_string()),
-                input_schema: ToolInputSchema::new(vec![], None, None),
-                annotations: None,
-                execution: None,
-                icons: vec![],
-                meta: None,
-                output_schema: None,
-                title: None,
+            .map(|(name, description, schema)| {
+                let (required, properties) = extract_schema_parts(&schema);
+                Tool {
+                    name: name.to_string(),
+                    description: Some(description.to_string()),
+                    input_schema: ToolInputSchema::new(required, properties, None),
+                    annotations: None,
+                    execution: None,
+                    icons: vec![],
+                    meta: None,
+                    output_schema: None,
+                    title: None,
+                }
             })
             .collect();
 
@@ -69,13 +72,47 @@ impl ServerHandler for NodusHandler {
             .map(serde_json::Value::Object)
             .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
 
-        let result = handlers::dispatch_tool(&params.name, &args_value, &self.cwd, &self.cache_root)
-            .map_err(|err| CallToolError::from_message(err.to_string()))?;
+        let result =
+            handlers::dispatch_tool(&params.name, &args_value, &self.cwd, &self.cache_root)
+                .map_err(|err| CallToolError::from_message(err.to_string()))?;
 
         Ok(CallToolResult::text_content(vec![TextContent::from(
             result,
         )]))
     }
+}
+
+/// Extract `required` and `properties` from a JSON schema value into the types
+/// expected by `ToolInputSchema::new`.
+fn extract_schema_parts(
+    schema: &serde_json::Value,
+) -> (
+    Vec<String>,
+    Option<std::collections::BTreeMap<String, serde_json::Map<String, serde_json::Value>>>,
+) {
+    let required = schema
+        .get("required")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let properties = schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(key, val)| {
+                    let prop_map = val.as_object().cloned().unwrap_or_default();
+                    (key.clone(), prop_map)
+                })
+                .collect()
+        });
+
+    (required, properties)
 }
 
 /// Build the server info advertised during MCP initialization.
@@ -85,9 +122,7 @@ fn server_info() -> InitializeResult {
             name: "nodus".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             title: Some("nodus MCP server".into()),
-            description: Some(
-                "Local-first CLI for managing project-scoped agent packages.".into(),
-            ),
+            description: Some("Local-first CLI for managing project-scoped agent packages.".into()),
             icons: vec![],
             website_url: None,
         },
