@@ -1,6 +1,7 @@
 pub mod cli;
 
 pub(crate) mod adapters;
+pub(crate) mod hashing;
 pub(crate) mod cache;
 pub(crate) mod clean;
 pub(crate) mod domain;
