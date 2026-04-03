@@ -4,3 +4,7 @@ publish_root = true
 
 [adapters]
 enabled = ["codex"]
+
+[mcp_servers.nodus]
+command = "nodus"
+args = ["mcp", "serve"]
