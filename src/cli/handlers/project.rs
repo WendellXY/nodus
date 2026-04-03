@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
+
 use crate::adapters::Adapter;
 use crate::cli::handlers::CommandContext;
 use crate::cli::output::format_adapters;
@@ -66,8 +68,10 @@ pub(crate) fn handle_relay(
     }
 
     if watch {
+        let rt = tokio::runtime::Runtime::new()
+            .context("failed to create async runtime for relay watch")?;
         if packages.len() == 1 {
-            crate::relay::watch_dependency_in_dir(
+            rt.block_on(crate::relay::watch_dependency_in_dir(
                 context.cwd,
                 context.cache_root,
                 &packages[0],
@@ -75,16 +79,16 @@ pub(crate) fn handle_relay(
                 via,
                 create_missing,
                 context.reporter,
-            )
+            ))
         } else {
-            crate::relay::watch_dependencies_in_dir(
+            rt.block_on(crate::relay::watch_dependencies_in_dir(
                 context.cwd,
                 context.cache_root,
                 &packages,
                 via,
                 create_missing,
                 context.reporter,
-            )
+            ))
         }
     } else {
         let summaries = if dry_run {

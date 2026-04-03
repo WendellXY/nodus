@@ -285,7 +285,7 @@ fn relay_dependencies_in_dir_mode(
         .collect())
 }
 
-pub fn watch_dependency_in_dir(
+pub async fn watch_dependency_in_dir(
     project_root: &Path,
     cache_root: &Path,
     package: &str,
@@ -306,10 +306,11 @@ pub fn watch_dependency_in_dir(
         },
         reporter,
     )
+    .await
     .map(|_| ())
 }
 
-pub fn watch_dependencies_in_dir(
+pub async fn watch_dependencies_in_dir(
     project_root: &Path,
     cache_root: &Path,
     packages: &[String],
@@ -329,6 +330,7 @@ pub fn watch_dependencies_in_dir(
         },
         reporter,
     )
+    .await
     .map(|_| ())
 }
 
@@ -2967,23 +2969,29 @@ tag = "v0.2.0"
         let output = SharedBuffer::default();
         let output_for_watch = output.clone();
         let watch_handle = thread::spawn(move || {
-            watch_dependency_in_dir_with_options(
-                &project_root,
-                &cache_root,
-                "playbook_ios",
-                RelayWatchInvocation {
-                    repo_path_override: Some(&linked_repo_for_watch),
-                    via_override: None,
-                    create_missing: false,
-                    options: RelayWatchOptions {
-                        poll_interval: Duration::from_millis(20),
-                        max_events: Some(2),
-                        max_polls: Some(200),
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let repo_ref = linked_repo_for_watch;
+                watch_dependency_in_dir_with_options(
+                    &project_root,
+                    &cache_root,
+                    "playbook_ios",
+                    RelayWatchInvocation {
+                        repo_path_override: Some(&repo_ref),
+                        via_override: None,
+                        create_missing: false,
+                        options: RelayWatchOptions {
+                            debounce: Duration::from_millis(10),
+                            fallback_interval: Duration::from_secs(30),
+                            max_events: Some(2),
+                            timeout: Some(Duration::from_secs(5)),
+                        },
                     },
-                },
-                &Reporter::sink(ColorMode::Never, output_for_watch),
-            )
-            .unwrap()
+                    &Reporter::sink(ColorMode::Never, output_for_watch),
+                )
+                .await
+                .unwrap()
+            })
         });
 
         let mut ready = false;
@@ -3034,23 +3042,29 @@ tag = "v0.2.0"
         let output = SharedBuffer::default();
         let output_for_watch = output.clone();
         let watch_handle = thread::spawn(move || {
-            watch_dependency_in_dir_with_options(
-                &project_root,
-                &cache_root,
-                "playbook_ios",
-                RelayWatchInvocation {
-                    repo_path_override: Some(&linked_repo_for_watch),
-                    via_override: None,
-                    create_missing: false,
-                    options: RelayWatchOptions {
-                        poll_interval: Duration::from_millis(20),
-                        max_events: Some(3),
-                        max_polls: Some(400),
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let repo_ref = linked_repo_for_watch;
+                watch_dependency_in_dir_with_options(
+                    &project_root,
+                    &cache_root,
+                    "playbook_ios",
+                    RelayWatchInvocation {
+                        repo_path_override: Some(&repo_ref),
+                        via_override: None,
+                        create_missing: false,
+                        options: RelayWatchOptions {
+                            debounce: Duration::from_millis(10),
+                            fallback_interval: Duration::from_secs(30),
+                            max_events: Some(3),
+                            timeout: Some(Duration::from_secs(5)),
+                        },
                     },
-                },
-                &Reporter::sink(ColorMode::Never, output_for_watch),
-            )
-            .unwrap()
+                    &Reporter::sink(ColorMode::Never, output_for_watch),
+                )
+                .await
+                .unwrap()
+            })
         });
 
         wait_until(
@@ -3167,23 +3181,28 @@ tag = "v0.2.0"
         let cache_root = cache.path().to_path_buf();
         let watch_packages = vec!["playbook_ios".to_string(), "docs_kit".to_string()];
         let watch_handle = thread::spawn(move || {
-            watch_dependencies_in_dir_with_options(
-                &project_root,
-                &cache_root,
-                &watch_packages,
-                RelayWatchInvocation {
-                    repo_path_override: None,
-                    via_override: None,
-                    create_missing: false,
-                    options: RelayWatchOptions {
-                        poll_interval: Duration::from_millis(20),
-                        max_events: Some(3),
-                        max_polls: Some(200),
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                watch_dependencies_in_dir_with_options(
+                    &project_root,
+                    &cache_root,
+                    &watch_packages,
+                    RelayWatchInvocation {
+                        repo_path_override: None,
+                        via_override: None,
+                        create_missing: false,
+                        options: RelayWatchOptions {
+                            debounce: Duration::from_millis(10),
+                            fallback_interval: Duration::from_secs(30),
+                            max_events: Some(3),
+                            timeout: Some(Duration::from_secs(5)),
+                        },
                     },
-                },
-                &Reporter::sink(ColorMode::Never, output_for_watch),
-            )
-            .unwrap()
+                    &Reporter::sink(ColorMode::Never, output_for_watch),
+                )
+                .await
+                .unwrap()
+            })
         });
 
         let mut ready = false;
