@@ -30,17 +30,19 @@ enum PathFingerprint {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RelayWatchOptions {
-    pub(super) poll_interval: Duration,
+    pub(super) debounce: Duration,
+    pub(super) fallback_interval: Duration,
     pub(super) max_events: Option<usize>,
-    pub(super) max_polls: Option<usize>,
+    pub(super) timeout: Option<Duration>,
 }
 
 impl Default for RelayWatchOptions {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(1),
+            debounce: Duration::from_millis(100),
+            fallback_interval: Duration::from_secs(30),
             max_events: None,
-            max_polls: None,
+            timeout: None,
         }
     }
 }
