@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
-use sha2::{Digest, Sha256};
+use crate::hashing::content_digest;
 
 use super::{
     ManagedMappingMigration, PackageSource, Resolution, ResolveMode, ResolvedManagedFile,
@@ -1000,13 +1000,14 @@ fn compute_package_digest(
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
 
-    let mut hasher = Sha256::new();
-    for (relative, contents) in file_payloads {
-        hasher.update(relative.to_string_lossy().as_bytes());
-        hasher.update([0]);
-        hasher.update(contents);
-        hasher.update([0xff]);
-    }
-
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    let path_strings: Vec<String> = file_payloads
+        .iter()
+        .map(|(path, _)| path.to_string_lossy().into_owned())
+        .collect();
+    let entries: Vec<(&str, &[u8])> = path_strings
+        .iter()
+        .zip(file_payloads.iter())
+        .map(|(path, (_, contents))| (path.as_str(), contents.as_slice()))
+        .collect();
+    Ok(content_digest(&entries))
 }

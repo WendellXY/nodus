@@ -376,6 +376,7 @@ fn locked_package_short_id(package: &LockedPackage) -> String {
             package
                 .digest
                 .strip_prefix("sha256:")
+                .or_else(|| package.digest.strip_prefix("blake3:"))
                 .unwrap_or(&package.digest),
         ),
     }
