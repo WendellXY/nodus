@@ -4,7 +4,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use semver::{Version, VersionReq};
-use sha2::{Digest, Sha256};
+use crate::hashing::blake3_hex;
 
 use crate::adapters::Adapter;
 use crate::execution::ExecutionMode;
@@ -800,8 +800,7 @@ fn looks_like_local_path(value: &str) -> bool {
 }
 
 fn short_hash(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    format!("{digest:x}")[..8].to_string()
+    blake3_hex(value.as_bytes())[..8].to_string()
 }
 
 fn ensure_shared_repository(
@@ -1146,6 +1145,20 @@ mod tests {
     use std::process::Command;
 
     use tempfile::TempDir;
+
+    #[test]
+    fn short_hash_produces_eight_hex_chars() {
+        let hash = short_hash("https://github.com/example/repo.git");
+        assert_eq!(hash.len(), 8);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn short_hash_is_deterministic() {
+        let a = short_hash("foo");
+        let b = short_hash("foo");
+        assert_eq!(a, b);
+    }
 
     fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
