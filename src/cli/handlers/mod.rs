@@ -1,4 +1,5 @@
 pub(super) mod dependency;
+pub(super) mod mcp;
 pub(super) mod project;
 pub(super) mod query;
 pub(super) mod system;

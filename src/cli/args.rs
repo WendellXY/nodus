@@ -14,7 +14,8 @@ use crate::cli::help::{
     REMOVE_LONG_ABOUT, REVIEW_ABOUT, REVIEW_AFTER_LONG_HELP, REVIEW_LONG_ABOUT, ROOT_ABOUT,
     ROOT_AFTER_LONG_HELP, ROOT_LONG_ABOUT, SYNC_ABOUT, SYNC_AFTER_LONG_HELP, SYNC_LONG_ABOUT,
     UPDATE_ABOUT, UPDATE_AFTER_LONG_HELP, UPDATE_LONG_ABOUT, UPGRADE_ABOUT,
-    UPGRADE_AFTER_LONG_HELP, UPGRADE_LONG_ABOUT,
+    UPGRADE_AFTER_LONG_HELP, UPGRADE_LONG_ABOUT, MCP_ABOUT, MCP_LONG_ABOUT, MCP_SERVE_ABOUT,
+    MCP_SERVE_LONG_ABOUT,
 };
 use crate::manifest::DependencyComponent;
 use crate::review::ReviewProvider;
@@ -381,4 +382,21 @@ pub(super) enum Command {
         )]
         json: bool,
     },
+    #[command(
+        about = MCP_ABOUT,
+        long_about = MCP_LONG_ABOUT,
+    )]
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum McpCommand {
+    #[command(
+        about = MCP_SERVE_ABOUT,
+        long_about = MCP_SERVE_LONG_ABOUT,
+    )]
+    Serve,
 }

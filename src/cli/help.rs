@@ -220,3 +220,23 @@ Examples:
   nodus doctor --check
   nodus doctor --force
   nodus doctor --json"#;
+
+pub(super) const MCP_ABOUT: &str = "MCP server for AI tool integration";
+
+pub(super) const MCP_LONG_ABOUT: &str = r#"Model Context Protocol (MCP) integration.
+
+Exposes nodus operations as MCP tools so AI agents can manage packages, relay edits, and inspect project state."#;
+
+pub(super) const MCP_SERVE_ABOUT: &str = "Start the MCP server on stdio";
+
+pub(super) const MCP_SERVE_LONG_ABOUT: &str = r#"Start a Model Context Protocol server that communicates via stdin/stdout.
+
+AI tools like Claude, Cursor, and Codex connect to this server to access nodus operations as MCP tools. The server runs until the client disconnects or the process is terminated.
+
+Example MCP config entry:
+  {
+    "nodus": {
+      "command": "nodus",
+      "args": ["mcp", "serve"]
+    }
+  }"#;

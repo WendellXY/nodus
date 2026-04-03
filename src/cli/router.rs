@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::args::Command;
-use super::handlers::{CommandContext, dependency, project, query, system};
+use super::handlers::{CommandContext, dependency, mcp, project, query, system};
 use crate::report::Reporter;
 
 pub(super) fn run_command_in_dir(
@@ -125,5 +125,8 @@ pub(super) fn run_command_in_dir(
         Command::Doctor { check, force, json } => {
             query::handle_doctor(&context, query::DoctorCommand { check, force, json })
         }
+        Command::Mcp { command } => match command {
+            crate::cli::args::McpCommand::Serve => mcp::handle_mcp_serve(&context),
+        },
     }
 }
