@@ -2010,7 +2010,7 @@ fn clean_all_preserves_non_cache_store_state() {
         .join("checkouts")
         .join("example")
         .join("abc123");
-    let snapshot_root = cache.path().join("store/sha256").join("sha");
+    let snapshot_root = cache.path().join("store/blake3").join("sha");
     let global_manifest = cache.path().join("global/nodus.toml");
     let update_state = cache.path().join("update-check.json");
 
@@ -2032,7 +2032,7 @@ fn clean_all_preserves_non_cache_store_state() {
     assert!(output.contains("Finished"));
     assert!(!cache.path().join("repositories").exists());
     assert!(!cache.path().join("checkouts").exists());
-    assert!(!cache.path().join("store/sha256").exists());
+    assert!(!cache.path().join("store/blake3").exists());
     assert!(global_manifest.exists());
     assert!(update_state.exists());
 }

@@ -139,6 +139,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn relayed_file_state_accepts_legacy_source_sha256_field() {
+        let toml_str = r#"source_sha256 = "abc123""#;
+        let state: RelayedFileState = toml::from_str(toml_str).unwrap();
+        assert_eq!(state.source_hash, "abc123");
+    }
+
+    #[test]
+    fn relayed_file_state_uses_source_hash_field() {
+        let toml_str = r#"source_hash = "def456""#;
+        let state: RelayedFileState = toml::from_str(toml_str).unwrap();
+        assert_eq!(state.source_hash, "def456");
+    }
+
+    #[test]
     fn round_trips_local_config_and_gitignore() {
         let temp = TempDir::new().unwrap();
         let mut config = LocalConfig::default();

@@ -1517,7 +1517,7 @@ mod tests {
             cache_root
                 .path()
                 .join("repositories")
-                .join("playbook-ios-3fbb5d0f.git")
+                .join("playbook-ios-130a2fa9.git")
         );
     }
 
@@ -1536,7 +1536,7 @@ mod tests {
             cache_root
                 .path()
                 .join("checkouts")
-                .join("playbook-ios-3fbb5d0f")
+                .join("playbook-ios-130a2fa9")
                 .join("abc123def456")
         );
     }

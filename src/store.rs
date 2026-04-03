@@ -8,7 +8,7 @@ use tempfile::{Builder, NamedTempFile};
 
 use crate::paths::strip_path_prefix;
 
-pub const STORE_ROOT: &str = "store/sha256";
+pub const STORE_ROOT: &str = "store/blake3";
 
 #[derive(Debug, Clone)]
 pub struct StoredPackage {
@@ -176,7 +176,8 @@ fn snapshot_is_complete(
 
 fn digest_directory_name(digest: &str) -> Result<&str> {
     digest
-        .strip_prefix("sha256:")
+        .strip_prefix("blake3:")
+        .or_else(|| digest.strip_prefix("sha256:"))
         .ok_or_else(|| anyhow::anyhow!("unsupported digest format `{digest}`"))
 }
 
@@ -303,6 +304,21 @@ beta = { path = "vendor/beta" }
                 .join("skills/shared/SKILL.md")
                 .is_file()
         );
+    }
+
+    #[test]
+    fn digest_directory_name_accepts_blake3_prefix() {
+        assert_eq!(digest_directory_name("blake3:abc123").unwrap(), "abc123");
+    }
+
+    #[test]
+    fn digest_directory_name_accepts_legacy_sha256_prefix() {
+        assert_eq!(digest_directory_name("sha256:abc123").unwrap(), "abc123");
+    }
+
+    #[test]
+    fn digest_directory_name_rejects_unknown_prefix() {
+        assert!(digest_directory_name("md5:abc123").is_err());
     }
 
     #[test]

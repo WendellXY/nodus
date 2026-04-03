@@ -519,12 +519,9 @@ pub fn namespaced_file_name(
 pub fn package_short_id(package: &ResolvedPackage) -> String {
     match &package.source {
         PackageSource::Git { rev, .. } => short_source_id(rev),
-        PackageSource::Path { .. } | PackageSource::Root => short_source_id(
-            package
-                .digest
-                .strip_prefix("sha256:")
-                .unwrap_or(&package.digest),
-        ),
+        PackageSource::Path { .. } | PackageSource::Root => short_source_id(strip_digest_prefix(
+            &package.digest,
+        )),
     }
 }
 
@@ -552,11 +549,13 @@ fn locked_package_short_id(package: &LockedPackage) -> String {
                 .as_deref()
                 .unwrap_or(package.digest.as_str()),
         ),
-        _ => short_source_id(
-            package
-                .digest
-                .strip_prefix("sha256:")
-                .unwrap_or(&package.digest),
-        ),
+        _ => short_source_id(strip_digest_prefix(&package.digest)),
     }
+}
+
+fn strip_digest_prefix(digest: &str) -> &str {
+    digest
+        .strip_prefix("sha256:")
+        .or_else(|| digest.strip_prefix("blake3:"))
+        .unwrap_or(digest)
 }
