@@ -14,6 +14,7 @@ pub(crate) mod local_config;
 pub(crate) mod lockfile;
 pub(crate) mod manifest;
 pub(crate) mod mcp;
+pub(crate) mod members;
 pub(crate) mod outdated;
 pub(crate) mod paths;
 pub(crate) mod relay;

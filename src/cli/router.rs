@@ -1,7 +1,8 @@
 use std::path::Path;
 
-use super::args::Command;
+use super::args::{Command, MembersCommand};
 use super::handlers::{CommandContext, dependency, mcp, project, query, system};
+use crate::members::MembersOperation;
 use crate::report::Reporter;
 
 pub(super) fn run_command_in_dir(
@@ -52,6 +53,54 @@ pub(super) fn run_command_in_dir(
             global,
             dry_run,
         } => dependency::handle_remove(&context, package, global, dry_run),
+        Command::Members { command } => match command {
+            MembersCommand::List { package } => dependency::handle_members_list(&context, package),
+            MembersCommand::Enable {
+                package,
+                members,
+                allow_high_sensitivity,
+                dry_run,
+            } => dependency::handle_members_update(
+                &context,
+                dependency::MembersUpdateCommand {
+                    package,
+                    members,
+                    operation: MembersOperation::Enable,
+                    allow_high_sensitivity,
+                    dry_run,
+                },
+            ),
+            MembersCommand::Disable {
+                package,
+                members,
+                allow_high_sensitivity,
+                dry_run,
+            } => dependency::handle_members_update(
+                &context,
+                dependency::MembersUpdateCommand {
+                    package,
+                    members,
+                    operation: MembersOperation::Disable,
+                    allow_high_sensitivity,
+                    dry_run,
+                },
+            ),
+            MembersCommand::Set {
+                package,
+                members,
+                allow_high_sensitivity,
+                dry_run,
+            } => dependency::handle_members_update(
+                &context,
+                dependency::MembersUpdateCommand {
+                    package,
+                    members,
+                    operation: MembersOperation::Set,
+                    allow_high_sensitivity,
+                    dry_run,
+                },
+            ),
+        },
         Command::List { json } => query::handle_list(&context, json),
         Command::Info {
             package,

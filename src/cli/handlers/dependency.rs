@@ -3,6 +3,7 @@ use crate::cli::handlers::CommandContext;
 use crate::cli::output::{display_dependency, format_adapters};
 use crate::install_paths::InstallPaths;
 use crate::manifest::{DependencyComponent, DependencyKind, RequestedGitRef};
+use crate::members::{MembersSummary, MembersUpdateRequest};
 
 pub(crate) struct AddCommand {
     pub(crate) url: String,
@@ -16,6 +17,14 @@ pub(crate) struct AddCommand {
     pub(crate) component: Vec<DependencyComponent>,
     pub(crate) sync_on_launch: bool,
     pub(crate) accept_all_dependencies: bool,
+    pub(crate) dry_run: bool,
+}
+
+pub(crate) struct MembersUpdateCommand {
+    pub(crate) package: String,
+    pub(crate) members: Vec<String>,
+    pub(crate) operation: crate::members::MembersOperation,
+    pub(crate) allow_high_sensitivity: bool,
     pub(crate) dry_run: bool,
 }
 
@@ -101,9 +110,9 @@ pub(crate) fn handle_add(context: &CommandContext<'_>, command: AddCommand) -> a
             .all(|member| !member.enabled)
         {
             let message = if dry_run {
-                "multiple child packages were detected; Nodus would record the wrapper only. Edit `members` after install or rerun with `--accept-all-dependencies` to enable every child package."
+                "multiple child packages were detected; Nodus would record the wrapper only. Rerun with `--accept-all-dependencies` or use `nodus members ...` after install to enable the child packages you want."
             } else {
-                "multiple child packages were detected; Nodus recorded the wrapper only. Edit `members` in `nodus.toml` to enable the child packages you want."
+                "multiple child packages were detected; Nodus recorded the wrapper only. Use `nodus members ...` to enable the child packages you want."
             };
             context.reporter.note(message)?;
         }
@@ -122,6 +131,76 @@ pub(crate) fn handle_add(context: &CommandContext<'_>, command: AddCommand) -> a
             display_dependency(summary.kind, &summary.alias),
             summary.reference,
             format_adapters(&summary.adapters),
+            summary.managed_file_count,
+        )
+    };
+    context.reporter.finish(message)?;
+    Ok(())
+}
+
+pub(crate) fn handle_members_list(
+    context: &CommandContext<'_>,
+    package: Option<String>,
+) -> anyhow::Result<()> {
+    let summaries = crate::members::list_dependency_members_in_dir(
+        context.cwd,
+        context.cache_root,
+        package.as_deref(),
+    )?;
+    if summaries.is_empty() {
+        context
+            .reporter
+            .note("no dependencies expose selectable child packages")?;
+        return Ok(());
+    }
+
+    context.reporter.line("dependency child packages:")?;
+    for summary in &summaries {
+        emit_members_summary(context, summary)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn handle_members_update(
+    context: &CommandContext<'_>,
+    command: MembersUpdateCommand,
+) -> anyhow::Result<()> {
+    let MembersUpdateCommand {
+        package,
+        members,
+        operation,
+        allow_high_sensitivity,
+        dry_run,
+    } = command;
+    let summary = crate::members::update_dependency_members_in_dir(
+        context.cwd,
+        context.cache_root,
+        MembersUpdateRequest {
+            package: &package,
+            requested_members: &members,
+            operation,
+            allow_high_sensitivity,
+            dry_run,
+        },
+        context.reporter,
+    )?;
+    let intro = if dry_run {
+        "dependency child selection:"
+    } else {
+        "dependency child packages:"
+    };
+    context.reporter.line(intro)?;
+    emit_members_summary(context, &summary.members)?;
+    let message = if dry_run {
+        format!(
+            "dry run: would update child package selection for {} and would write {} managed files",
+            display_dependency(summary.kind, &summary.alias),
+            summary.managed_file_count,
+        )
+    } else {
+        format!(
+            "updated child package selection for {} and wrote {} managed files",
+            display_dependency(summary.kind, &summary.alias),
             summary.managed_file_count,
         )
     };
@@ -169,6 +248,30 @@ pub(crate) fn handle_remove(
         )
     };
     context.reporter.finish(message)?;
+    Ok(())
+}
+
+fn emit_members_summary(
+    context: &CommandContext<'_>,
+    summary: &MembersSummary,
+) -> anyhow::Result<()> {
+    context.reporter.line(format!(
+        "  {}",
+        display_dependency(summary.kind, &summary.alias)
+    ))?;
+    context
+        .reporter
+        .line(format!("    config: {}", summary.dependency_preview))?;
+    for member in &summary.members {
+        let status = if member.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        context
+            .reporter
+            .line(format!("    {} ({status})", member.id))?;
+    }
     Ok(())
 }
 

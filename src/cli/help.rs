@@ -63,6 +63,33 @@ Examples:
   nodus remove nodus --global
   nodus remove nodus --dry-run"#;
 
+pub(super) const MEMBERS_ABOUT: &str =
+    "Manage selected child packages for wrapper and workspace dependencies";
+
+pub(super) const MEMBERS_LONG_ABOUT: &str = r#"Manage selected child packages for wrapper and workspace dependencies.
+
+Inspect or update the `members = [...]` selection for a direct dependency that exposes child packages.
+
+Use this after installing a wrapper or workspace dependency when you want to enable, disable, or replace the selected child packages without editing `nodus.toml` by hand."#;
+
+pub(super) const MEMBERS_LIST_ABOUT: &str = "Show enabled and disabled child packages";
+
+pub(super) const MEMBERS_LIST_LONG_ABOUT: &str = r#"List the selectable child packages for one direct dependency, or for every direct dependency that exposes child packages."#;
+
+pub(super) const MEMBERS_ENABLE_ABOUT: &str = "Enable one or more child packages and resync";
+
+pub(super) const MEMBERS_ENABLE_LONG_ABOUT: &str = r#"Enable one or more child packages for a direct wrapper or workspace dependency, update `nodus.toml`, and sync managed outputs."#;
+
+pub(super) const MEMBERS_DISABLE_ABOUT: &str = "Disable one or more child packages and resync";
+
+pub(super) const MEMBERS_DISABLE_LONG_ABOUT: &str = r#"Disable one or more child packages for a direct wrapper or workspace dependency, update `nodus.toml`, and sync managed outputs."#;
+
+pub(super) const MEMBERS_SET_ABOUT: &str = "Replace the selected child packages and resync";
+
+pub(super) const MEMBERS_SET_LONG_ABOUT: &str = r#"Replace the selected child packages for a direct wrapper or workspace dependency, update `nodus.toml`, and sync managed outputs.
+
+Pass no child packages to clear the current selection and leave the wrapper recorded without enabled children."#;
+
 pub(super) const LIST_ABOUT: &str = "List configured dependencies and any locked metadata";
 
 pub(super) const LIST_LONG_ABOUT: &str = "List the dependencies recorded in `nodus.toml` together with any resolved metadata from `nodus.lock`.";

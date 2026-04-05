@@ -193,6 +193,37 @@ authentication = "ON_INSTALL"
     (repo, url)
 }
 
+fn create_wrapper_dependency() -> (TempDir, String) {
+    let repo = TempDir::new().unwrap();
+    write_file(
+        &repo.path().join("nodus.toml"),
+        r#"
+[dependencies.review]
+path = "packages/review"
+
+[dependencies.checks]
+path = "packages/checks"
+"#,
+    );
+    write_skill(&repo.path().join("packages/review/skills/review"), "Review");
+    write_skill(&repo.path().join("packages/checks/skills/checks"), "Checks");
+    init_git_repo(repo.path());
+
+    let output = ProcessCommand::new("git")
+        .args(["tag", "v0.3.0"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let url = repo.path().to_string_lossy().to_string();
+    (repo, url)
+}
+
 fn project_cache_paths(project_root: &Path, cache_root: &Path) -> (PathBuf, PathBuf, Vec<PathBuf>) {
     let lockfile = Lockfile::read(&project_root.join("nodus.lock")).unwrap();
     let dependency = lockfile
@@ -230,6 +261,17 @@ fn run_command_streams(command: Command, cwd: &Path, cache_root: &Path) -> (Stri
     run_command_in_dir(command, cwd, cache_root, &reporter).unwrap();
 
     (stdout.contents(), stderr.contents())
+}
+
+fn installed_dependency_alias(project_root: &Path) -> String {
+    crate::manifest::load_root_from_dir(project_root)
+        .unwrap()
+        .manifest
+        .dependencies
+        .keys()
+        .next()
+        .unwrap()
+        .clone()
 }
 
 fn read_optional(path: &Path) -> Option<Vec<u8>> {
@@ -390,6 +432,46 @@ fn doctor_command_rejects_invalid_flag_combinations() {
         missing_apply.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
     );
+}
+
+#[test]
+fn members_command_parses_subcommands_and_flags() {
+    let list = Cli::try_parse_from(["nodus", "members", "list"]).unwrap();
+    let enable = Cli::try_parse_from([
+        "nodus",
+        "members",
+        "enable",
+        "wrapper",
+        "review",
+        "--allow-high-sensitivity",
+        "--dry-run",
+    ])
+    .unwrap();
+    let set = Cli::try_parse_from(["nodus", "members", "set", "wrapper"]).unwrap();
+
+    assert!(matches!(
+        list.command,
+        Command::Members {
+            command: super::args::MembersCommand::List { package: None }
+        }
+    ));
+    assert!(matches!(
+        enable.command,
+        Command::Members {
+            command: super::args::MembersCommand::Enable {
+                package,
+                members,
+                allow_high_sensitivity: true,
+                dry_run: true,
+            }
+        } if package == "wrapper" && members == ["review"]
+    ));
+    assert!(matches!(
+        set.command,
+        Command::Members {
+            command: super::args::MembersCommand::Set { package, members, .. }
+        } if package == "wrapper" && members.is_empty()
+    ));
 }
 
 #[test]
@@ -707,6 +789,51 @@ fn add_help_leads_with_safe_example_and_next_step() {
     assert!(help.contains(
         "After a project-scoped install, run `nodus doctor` to confirm the repo is consistent."
     ));
+}
+
+#[test]
+fn members_help_describes_child_package_selection() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    let help = root
+        .find_subcommand_mut("members")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+
+    assert!(help.contains("Inspect or update the `members = [...]` selection"));
+    assert!(help.contains("wrapper or workspace dependency"));
+    assert!(help.contains("without editing `nodus.toml` by hand"));
+    assert!(help.contains("enable"));
+    assert!(help.contains("disable"));
+    assert!(help.contains("set"));
+}
+
+#[test]
+fn members_mutating_subcommand_help_mentions_dry_run_and_clearing_selection() {
+    let mut root = <Cli as clap::CommandFactory>::command();
+    for name in ["enable", "disable", "set"] {
+        let help = root
+            .find_subcommand_mut("members")
+            .unwrap()
+            .find_subcommand_mut(name)
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("--dry-run"), "{name} help missing dry-run");
+        assert!(
+            help.contains("may still populate the shared store"),
+            "{name} help missing shared-store explanation"
+        );
+    }
+
+    let clear_help = root
+        .find_subcommand_mut("members")
+        .unwrap()
+        .find_subcommand_mut("set")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+    assert!(clear_help.contains("Pass no child packages to clear the current selection"));
 }
 
 #[test]
@@ -1609,6 +1736,317 @@ fn add_dry_run_warns_and_disables_invalid_workspace_members() {
     assert!(output.contains("axiom (enabled)"));
     assert!(output.contains("firebase (disabled)"));
     assert!(output.contains("warning: ignoring workspace member `firebase`"));
+}
+
+#[test]
+fn members_list_and_enable_update_workspace_dependency_selection() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (_repo, url) = create_workspace_dependency();
+
+    run_command_in_dir(
+        Command::Add {
+            url,
+            global: false,
+            dev: false,
+            tag: None,
+            branch: None,
+            version: None,
+            revision: None,
+            adapter: vec![Adapter::Claude],
+            component: vec![],
+            sync_on_launch: false,
+            accept_all_dependencies: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let alias = installed_dependency_alias(temp.path());
+    let list_output = run_command_output(
+        Command::Members {
+            command: super::args::MembersCommand::List {
+                package: Some(alias.clone()),
+            },
+        },
+        temp.path(),
+        cache.path(),
+    );
+    assert!(list_output.contains("dependency child packages:"));
+    assert!(list_output.contains("axiom (disabled)"));
+    assert!(list_output.contains("firebase (disabled)"));
+
+    let enable_output = run_command_output(
+        Command::Members {
+            command: super::args::MembersCommand::Enable {
+                package: alias,
+                members: vec!["axiom".into()],
+                allow_high_sensitivity: false,
+                dry_run: false,
+            },
+        },
+        temp.path(),
+        cache.path(),
+    );
+
+    assert!(enable_output.contains("updated child package selection"));
+    assert!(enable_output.contains("axiom (enabled)"));
+    assert!(enable_output.contains("firebase (disabled)"));
+    let manifest = fs::read_to_string(temp.path().join("nodus.toml")).unwrap();
+    assert!(manifest.contains("members = [\"axiom\"]"));
+    assert!(temp.path().join(".claude/skills/review/SKILL.md").exists());
+    assert!(!temp.path().join(".claude/skills/checks/SKILL.md").exists());
+}
+
+#[test]
+fn members_set_empty_clears_workspace_dependency_selection() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (_repo, url) = create_workspace_dependency();
+
+    run_command_in_dir(
+        Command::Add {
+            url,
+            global: false,
+            dev: false,
+            tag: None,
+            branch: None,
+            version: None,
+            revision: None,
+            adapter: vec![Adapter::Claude],
+            component: vec![],
+            sync_on_launch: false,
+            accept_all_dependencies: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let alias = installed_dependency_alias(temp.path());
+    run_command_in_dir(
+        Command::Members {
+            command: super::args::MembersCommand::Enable {
+                package: alias.clone(),
+                members: vec!["axiom".into()],
+                allow_high_sensitivity: false,
+                dry_run: false,
+            },
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let set_output = run_command_output(
+        Command::Members {
+            command: super::args::MembersCommand::Set {
+                package: alias,
+                members: vec![],
+                allow_high_sensitivity: false,
+                dry_run: false,
+            },
+        },
+        temp.path(),
+        cache.path(),
+    );
+
+    assert!(set_output.contains("updated child package selection"));
+    assert!(set_output.contains("axiom (disabled)"));
+    assert!(set_output.contains("firebase (disabled)"));
+    let manifest = fs::read_to_string(temp.path().join("nodus.toml")).unwrap();
+    assert!(!manifest.contains("members ="));
+    assert!(!temp.path().join(".claude/skills/review/SKILL.md").exists());
+    assert!(!temp.path().join(".claude/skills/checks/SKILL.md").exists());
+}
+
+#[test]
+fn members_enable_dry_run_previews_workspace_selection_without_writing() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (_repo, url) = create_workspace_dependency();
+
+    run_command_in_dir(
+        Command::Add {
+            url,
+            global: false,
+            dev: false,
+            tag: None,
+            branch: None,
+            version: None,
+            revision: None,
+            adapter: vec![Adapter::Claude],
+            component: vec![],
+            sync_on_launch: false,
+            accept_all_dependencies: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let alias = installed_dependency_alias(temp.path());
+    let manifest_before = fs::read_to_string(temp.path().join("nodus.toml")).unwrap();
+    let output = run_command_output(
+        Command::Members {
+            command: super::args::MembersCommand::Enable {
+                package: alias,
+                members: vec!["axiom".into()],
+                allow_high_sensitivity: false,
+                dry_run: true,
+            },
+        },
+        temp.path(),
+        cache.path(),
+    );
+
+    assert!(output.contains("dependency child selection:"));
+    assert!(output.contains("dry run: would update child package selection"));
+    assert!(output.contains("axiom (enabled)"));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("nodus.toml")).unwrap(),
+        manifest_before
+    );
+    assert!(!temp.path().join(".claude/skills/review/SKILL.md").exists());
+    assert!(!temp.path().join(".claude/skills/checks/SKILL.md").exists());
+}
+
+#[test]
+fn members_command_rejects_unknown_workspace_member_before_mutating_manifest() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (_repo, url) = create_workspace_dependency();
+
+    run_command_in_dir(
+        Command::Add {
+            url,
+            global: false,
+            dev: false,
+            tag: None,
+            branch: None,
+            version: None,
+            revision: None,
+            adapter: vec![Adapter::Claude],
+            component: vec![],
+            sync_on_launch: false,
+            accept_all_dependencies: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let alias = installed_dependency_alias(temp.path());
+    let manifest_before = fs::read_to_string(temp.path().join("nodus.toml")).unwrap();
+    let error = run_command_in_dir(
+        Command::Members {
+            command: super::args::MembersCommand::Enable {
+                package: alias,
+                members: vec!["missing".into()],
+                allow_high_sensitivity: false,
+                dry_run: false,
+            },
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("does not expose child package `missing`")
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("nodus.toml")).unwrap(),
+        manifest_before
+    );
+}
+
+#[test]
+fn members_enable_and_disable_manage_wrapper_child_packages() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    let (_repo, url) = create_wrapper_dependency();
+
+    run_command_in_dir(
+        Command::Add {
+            url,
+            global: false,
+            dev: false,
+            tag: None,
+            branch: None,
+            version: None,
+            revision: None,
+            adapter: vec![Adapter::Claude],
+            component: vec![],
+            sync_on_launch: false,
+            accept_all_dependencies: false,
+            dry_run: false,
+        },
+        temp.path(),
+        cache.path(),
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    let alias = installed_dependency_alias(temp.path());
+    let list_output = run_command_output(
+        Command::Members {
+            command: super::args::MembersCommand::List {
+                package: Some(alias.clone()),
+            },
+        },
+        temp.path(),
+        cache.path(),
+    );
+    assert!(list_output.contains("review (disabled)"));
+    assert!(list_output.contains("checks (disabled)"));
+
+    let enable_output = run_command_output(
+        Command::Members {
+            command: super::args::MembersCommand::Enable {
+                package: alias.clone(),
+                members: vec!["checks".into()],
+                allow_high_sensitivity: false,
+                dry_run: false,
+            },
+        },
+        temp.path(),
+        cache.path(),
+    );
+    assert!(enable_output.contains("checks (enabled)"));
+    assert!(enable_output.contains("review (disabled)"));
+    assert!(temp.path().join(".claude/skills/checks/SKILL.md").exists());
+    assert!(!temp.path().join(".claude/skills/review/SKILL.md").exists());
+
+    let disable_output = run_command_output(
+        Command::Members {
+            command: super::args::MembersCommand::Disable {
+                package: alias,
+                members: vec!["checks".into()],
+                allow_high_sensitivity: false,
+                dry_run: false,
+            },
+        },
+        temp.path(),
+        cache.path(),
+    );
+    assert!(disable_output.contains("checks (disabled)"));
+    assert!(disable_output.contains("review (disabled)"));
+    assert!(!temp.path().join(".claude/skills/checks/SKILL.md").exists());
+    assert!(!temp.path().join(".claude/skills/review/SKILL.md").exists());
 }
 
 #[test]

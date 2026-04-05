@@ -10,12 +10,14 @@ use crate::cli::help::{
     DOCTOR_AFTER_LONG_HELP, DOCTOR_LONG_ABOUT, INFO_ABOUT, INFO_AFTER_LONG_HELP, INFO_LONG_ABOUT,
     INIT_ABOUT, INIT_AFTER_LONG_HELP, INIT_LONG_ABOUT, LIST_ABOUT, LIST_AFTER_LONG_HELP,
     LIST_LONG_ABOUT, MCP_ABOUT, MCP_LONG_ABOUT, MCP_SERVE_ABOUT, MCP_SERVE_LONG_ABOUT,
-    OUTDATED_ABOUT, OUTDATED_AFTER_LONG_HELP, OUTDATED_LONG_ABOUT, RELAY_ABOUT,
-    RELAY_AFTER_LONG_HELP, RELAY_LONG_ABOUT, REMOVE_ABOUT, REMOVE_AFTER_LONG_HELP,
-    REMOVE_LONG_ABOUT, REVIEW_ABOUT, REVIEW_AFTER_LONG_HELP, REVIEW_LONG_ABOUT, ROOT_ABOUT,
-    ROOT_AFTER_LONG_HELP, ROOT_LONG_ABOUT, SYNC_ABOUT, SYNC_AFTER_LONG_HELP, SYNC_LONG_ABOUT,
-    UPDATE_ABOUT, UPDATE_AFTER_LONG_HELP, UPDATE_LONG_ABOUT, UPGRADE_ABOUT,
-    UPGRADE_AFTER_LONG_HELP, UPGRADE_LONG_ABOUT,
+    MEMBERS_ABOUT, MEMBERS_DISABLE_ABOUT, MEMBERS_DISABLE_LONG_ABOUT, MEMBERS_ENABLE_ABOUT,
+    MEMBERS_ENABLE_LONG_ABOUT, MEMBERS_LIST_ABOUT, MEMBERS_LIST_LONG_ABOUT, MEMBERS_LONG_ABOUT,
+    MEMBERS_SET_ABOUT, MEMBERS_SET_LONG_ABOUT, OUTDATED_ABOUT, OUTDATED_AFTER_LONG_HELP,
+    OUTDATED_LONG_ABOUT, RELAY_ABOUT, RELAY_AFTER_LONG_HELP, RELAY_LONG_ABOUT, REMOVE_ABOUT,
+    REMOVE_AFTER_LONG_HELP, REMOVE_LONG_ABOUT, REVIEW_ABOUT, REVIEW_AFTER_LONG_HELP,
+    REVIEW_LONG_ABOUT, ROOT_ABOUT, ROOT_AFTER_LONG_HELP, ROOT_LONG_ABOUT, SYNC_ABOUT,
+    SYNC_AFTER_LONG_HELP, SYNC_LONG_ABOUT, UPDATE_ABOUT, UPDATE_AFTER_LONG_HELP, UPDATE_LONG_ABOUT,
+    UPGRADE_ABOUT, UPGRADE_AFTER_LONG_HELP, UPGRADE_LONG_ABOUT,
 };
 use crate::manifest::DependencyComponent;
 use crate::review::ReviewProvider;
@@ -134,6 +136,14 @@ pub(super) enum Command {
             help = "Preview project changes without writing to the project or linked repo; may still populate the shared store to compute the result"
         )]
         dry_run: bool,
+    },
+    #[command(
+        about = MEMBERS_ABOUT,
+        long_about = MEMBERS_LONG_ABOUT,
+    )]
+    Members {
+        #[command(subcommand)]
+        command: MembersCommand,
     },
     #[command(
         about = LIST_ABOUT,
@@ -402,6 +412,66 @@ pub(super) enum Command {
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum MembersCommand {
+    #[command(about = MEMBERS_LIST_ABOUT, long_about = MEMBERS_LIST_LONG_ABOUT)]
+    List {
+        #[arg(help = "Direct dependency alias or repository reference to inspect")]
+        package: Option<String>,
+    },
+    #[command(about = MEMBERS_ENABLE_ABOUT, long_about = MEMBERS_ENABLE_LONG_ABOUT)]
+    Enable {
+        #[arg(help = "Direct dependency alias or repository reference to update")]
+        package: String,
+        #[arg(required = true, num_args = 1.., value_name = "MEMBER", help = "One or more child package ids to enable")]
+        members: Vec<String>,
+        #[arg(
+            long = "allow-high-sensitivity",
+            help = "Allow packages that declare high-sensitivity capabilities"
+        )]
+        allow_high_sensitivity: bool,
+        #[arg(
+            long = "dry-run",
+            help = "Preview project changes without writing to the project or linked repo; may still populate the shared store to compute the result"
+        )]
+        dry_run: bool,
+    },
+    #[command(about = MEMBERS_DISABLE_ABOUT, long_about = MEMBERS_DISABLE_LONG_ABOUT)]
+    Disable {
+        #[arg(help = "Direct dependency alias or repository reference to update")]
+        package: String,
+        #[arg(required = true, num_args = 1.., value_name = "MEMBER", help = "One or more child package ids to disable")]
+        members: Vec<String>,
+        #[arg(
+            long = "allow-high-sensitivity",
+            help = "Allow packages that declare high-sensitivity capabilities"
+        )]
+        allow_high_sensitivity: bool,
+        #[arg(
+            long = "dry-run",
+            help = "Preview project changes without writing to the project or linked repo; may still populate the shared store to compute the result"
+        )]
+        dry_run: bool,
+    },
+    #[command(about = MEMBERS_SET_ABOUT, long_about = MEMBERS_SET_LONG_ABOUT)]
+    Set {
+        #[arg(help = "Direct dependency alias or repository reference to update")]
+        package: String,
+        #[arg(num_args = 0.., value_name = "MEMBER", help = "The complete child package selection to persist")]
+        members: Vec<String>,
+        #[arg(
+            long = "allow-high-sensitivity",
+            help = "Allow packages that declare high-sensitivity capabilities"
+        )]
+        allow_high_sensitivity: bool,
+        #[arg(
+            long = "dry-run",
+            help = "Preview project changes without writing to the project or linked repo; may still populate the shared store to compute the result"
+        )]
+        dry_run: bool,
     },
 }
 
