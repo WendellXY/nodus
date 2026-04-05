@@ -8,7 +8,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 
 use super::{
-    RelaySummary, build_mappings, dependency_context, display_relative, load_workspace,
+    RelaySummary, dependency_context, display_relative, load_workspace, mappings,
     relay_dependency_in_dir, resolve_existing_link,
 };
 use crate::adapters::Adapter;
@@ -287,7 +287,7 @@ fn capture_watch_state(
     for package in packages {
         let dependency = dependency_context(&workspace, package)?;
         let linked_repo = resolve_existing_link(&workspace.local_config, &dependency)?;
-        let mappings = build_mappings(
+        let mappings = mappings::build_mappings(
             &managed_names,
             &workspace.resolution.packages,
             &dependency,
