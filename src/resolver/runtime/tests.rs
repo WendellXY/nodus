@@ -4459,7 +4459,7 @@ fn sync_emits_startup_sync_files_for_supported_adapters() {
         &temp.path().join(MANIFEST_FILE),
         r#"
 [adapters]
-enabled = ["claude", "opencode"]
+enabled = ["claude", "codex", "opencode"]
 
 [launch_hooks]
 sync_on_startup = true
@@ -4470,17 +4470,118 @@ sync_on_startup = true
 
     assert!(temp.path().join(".claude/hooks/nodus-sync.sh").exists());
     assert!(temp.path().join(".claude/settings.local.json").exists());
+    assert!(temp.path().join(".codex/hooks/nodus-sync.sh").exists());
+    assert!(temp.path().join(".codex/hooks.json").exists());
+    assert!(temp.path().join(".codex/config.toml").exists());
     assert!(temp.path().join(".opencode/plugins/nodus-sync.js").exists());
     assert!(temp.path().join(".opencode/scripts/nodus-sync.sh").exists());
 
     let claude_settings =
         fs::read_to_string(temp.path().join(".claude/settings.local.json")).unwrap();
+    let codex_hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    let codex_config: toml::Value =
+        toml::from_str(&fs::read_to_string(temp.path().join(".codex/config.toml")).unwrap())
+            .unwrap();
     let opencode_plugin =
         fs::read_to_string(temp.path().join(".opencode/plugins/nodus-sync.js")).unwrap();
 
     assert!(claude_settings.contains("\"SessionStart\""));
     assert!(claude_settings.contains("\"startup\""));
+    assert_eq!(
+        codex_config["features"]["codex_hooks"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        codex_hooks["hooks"]["SessionStart"][0]["matcher"].as_str(),
+        Some("startup|resume")
+    );
+    assert_eq!(
+        codex_hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str(),
+        Some(
+            r#"sh "$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.codex/hooks/nodus-sync.sh""#
+        )
+    );
     assert!(opencode_plugin.contains(".opencode/scripts/nodus-sync.sh"));
+}
+
+#[test]
+fn sync_merges_codex_startup_hook_into_existing_hooks_without_duplicates() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[adapters]
+enabled = ["codex"]
+
+[launch_hooks]
+sync_on_startup = true
+"#,
+    );
+    write_file(
+        &temp.path().join(".codex/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/custom-startup.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    let session_start = hooks["hooks"]["SessionStart"].as_array().unwrap();
+    assert_eq!(session_start.len(), 2);
+    assert!(session_start.iter().any(|entry| {
+        entry["matcher"].as_str() == Some("startup")
+            && entry["hooks"].as_array().is_some_and(|hooks| {
+                hooks.iter().any(|hook| {
+                    hook["type"].as_str() == Some("command")
+                        && hook["command"].as_str() == Some("./scripts/custom-startup.sh")
+                })
+            })
+    }));
+    assert_eq!(
+        session_start
+            .iter()
+            .filter(|entry| entry["matcher"].as_str() == Some("startup|resume"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        session_start
+            .iter()
+            .filter(|entry| {
+                entry["hooks"].as_array().is_some_and(|hooks| {
+                    hooks.iter().any(|hook| {
+                        hook["type"].as_str() == Some("command")
+                            && hook["command"].as_str()
+                                == Some(
+                                    r#"sh "$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.codex/hooks/nodus-sync.sh""#,
+                                )
+                    })
+                })
+            })
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -4577,7 +4678,7 @@ fn sync_warns_when_launch_hooks_are_unsupported_for_selected_adapters() {
         &temp.path().join(MANIFEST_FILE),
         r#"
 [adapters]
-enabled = ["agents", "codex", "cursor"]
+enabled = ["agents", "cursor"]
 
 [launch_hooks]
 sync_on_startup = true
@@ -4600,7 +4701,6 @@ sync_on_startup = true
 
     let output = buffer.contents();
     assert!(output.contains("launch sync is not emitted for `agents`"));
-    assert!(output.contains("launch sync is not emitted for `codex`"));
     assert!(output.contains("launch sync is not emitted for `cursor`"));
 }
 

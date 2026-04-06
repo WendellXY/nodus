@@ -57,8 +57,10 @@ struct ProjectOpenCodeConfig {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct ProjectCodexConfig {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     mcp_servers: BTreeMap<String, TomlValue>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    features: BTreeMap<String, TomlValue>,
     #[serde(flatten)]
     extra: BTreeMap<String, TomlValue>,
 }
@@ -91,6 +93,10 @@ pub(crate) fn build_output_plan(
     let mut plan = OutputAccumulator::default();
     let managed_names =
         ManagedArtifactNames::from_resolved_packages(packages.iter().map(|(package, _)| package));
+    let root_launch_sync_enabled = packages.iter().any(|(package, _)| {
+        matches!(package.source, PackageSource::Root)
+            && package.manifest.manifest.sync_on_launch_enabled()
+    });
 
     for (package, snapshot_root) in packages {
         if matches!(package.source, PackageSource::Root) && !package.manifest.manifest.publish_root
@@ -474,6 +480,7 @@ pub(crate) fn build_output_plan(
             packages,
             existing_lockfile,
             merge_existing_mcp,
+            root_launch_sync_enabled,
         )?
     {
         plan.managed_files
@@ -497,10 +504,7 @@ pub(crate) fn build_output_plan(
     if packages
         .iter()
         .any(|(package, _)| matches!(package.source, PackageSource::Root))
-        && packages.iter().any(|(package, _)| {
-            matches!(package.source, PackageSource::Root)
-                && package.manifest.manifest.sync_on_launch_enabled()
-        })
+        && root_launch_sync_enabled
     {
         for file in sync_on_startup_files(project_root, selected_adapters, &mut plan.warnings)? {
             plan.managed_files
@@ -704,6 +708,7 @@ fn codex_mcp_config_file(
     packages: &[(ResolvedPackage, PathBuf)],
     existing_lockfile: Option<&Lockfile>,
     merge_existing_mcp: bool,
+    emit_launch_sync: bool,
 ) -> Result<Option<ManagedFile>> {
     let path = project_root.join(".codex/config.toml");
     let previously_managed = existing_lockfile
@@ -741,7 +746,7 @@ fn codex_mcp_config_file(
         desired_servers.insert("nodus".to_string(), TomlValue::Table(table));
     }
 
-    if desired_servers.is_empty() && previously_managed.is_empty() {
+    if desired_servers.is_empty() && previously_managed.is_empty() && !emit_launch_sync {
         return Ok(None);
     }
 
@@ -755,8 +760,15 @@ fn codex_mcp_config_file(
         !previously_managed.contains(server_name) && !desired_servers.contains_key(server_name)
     });
     config.mcp_servers.extend(desired_servers);
+    if emit_launch_sync {
+        config
+            .features
+            .insert("codex_hooks".into(), TomlValue::Boolean(true));
+    } else {
+        config.features.remove("codex_hooks");
+    }
 
-    if config.mcp_servers.is_empty() && config.extra.is_empty() {
+    if config.mcp_servers.is_empty() && config.features.is_empty() && config.extra.is_empty() {
         return Ok(None);
     }
 
@@ -1188,9 +1200,12 @@ fn sync_on_startup_files(
         );
     }
     if selected_adapters.contains(Adapter::Codex) {
-        warnings.push(
-            "launch sync is not emitted for `codex`; project config is supported, but no documented startup hook is available".into(),
-        );
+        files.extend(super::codex::sync_on_startup_files(project_root)?);
+        if cfg!(windows) {
+            warnings.push(
+                "launch sync is emitted for `codex`, but Codex hooks are currently disabled on Windows".into(),
+            );
+        }
     }
     if selected_adapters.contains(Adapter::Copilot) {
         warnings.push(
