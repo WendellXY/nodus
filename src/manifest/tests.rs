@@ -1465,9 +1465,10 @@ fn rejects_conflicting_mcp_servers_from_claude_and_codex_plugin_metadata() {
     let error = load_dependency_from_dir(temp.path())
         .unwrap_err()
         .to_string();
+    let normalized_error = error.replace('\\', "/");
 
     assert!(error.contains("declares conflicting MCP server `figma`"));
-    assert!(error.contains("config/codex-mcp.json"));
+    assert!(normalized_error.contains("config/codex-mcp.json"));
 }
 
 #[test]
