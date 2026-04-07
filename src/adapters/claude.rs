@@ -93,7 +93,10 @@ pub fn rule_file(
     )
 }
 
-pub fn sync_on_startup_files(project_root: &Path) -> Result<Vec<ManagedFile>> {
+pub fn sync_on_startup_files(
+    project_root: &Path,
+    merge_existing: bool,
+) -> Result<Vec<ManagedFile>> {
     let settings_path = project_root.join(".claude/settings.local.json");
     Ok(vec![
         ManagedFile {
@@ -102,7 +105,7 @@ pub fn sync_on_startup_files(project_root: &Path) -> Result<Vec<ManagedFile>> {
         },
         ManagedFile {
             path: settings_path.clone(),
-            contents: merged_settings_local_contents(&settings_path)?,
+            contents: settings_local_contents(&settings_path, merge_existing)?,
         },
     ])
 }
@@ -165,8 +168,8 @@ fi
     .into_bytes()
 }
 
-fn merged_settings_local_contents(path: &Path) -> Result<Vec<u8>> {
-    let mut root = if path.exists() {
+fn settings_local_contents(path: &Path, merge_existing: bool) -> Result<Vec<u8>> {
+    let mut root = if merge_existing && path.exists() {
         serde_json::from_slice::<Value>(
             &fs::read(path)
                 .with_context(|| format!("failed to read existing {}", path.display()))?,

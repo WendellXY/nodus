@@ -506,7 +506,12 @@ pub(crate) fn build_output_plan(
         .any(|(package, _)| matches!(package.source, PackageSource::Root))
         && root_launch_sync_enabled
     {
-        for file in sync_on_startup_files(project_root, selected_adapters, &mut plan.warnings)? {
+        for file in sync_on_startup_files(
+            project_root,
+            selected_adapters,
+            merge_existing_mcp,
+            &mut plan.warnings,
+        )? {
             plan.managed_files
                 .insert(display_relative(project_root, &file.path));
             merge_file(&mut plan.files, file)?;
@@ -1184,12 +1189,16 @@ fn render_gitignore(explicit_lines: &[String], patterns: &BTreeSet<String>) -> S
 fn sync_on_startup_files(
     project_root: &Path,
     selected_adapters: Adapters,
+    merge_existing_mcp: bool,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<ManagedFile>> {
     let mut files = Vec::new();
 
     if selected_adapters.contains(Adapter::Claude) {
-        files.extend(super::claude::sync_on_startup_files(project_root)?);
+        files.extend(super::claude::sync_on_startup_files(
+            project_root,
+            merge_existing_mcp,
+        )?);
     }
     if selected_adapters.contains(Adapter::OpenCode) {
         files.extend(super::opencode::sync_on_startup_files(project_root));

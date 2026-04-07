@@ -4670,6 +4670,71 @@ sync_on_startup = true
 }
 
 #[test]
+fn sync_gracefully_merges_claude_local_settings_when_launch_hooks_are_enabled_later() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[adapters]
+enabled = ["claude"]
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    write_file(
+        &temp.path().join(".claude/settings.local.json"),
+        r#"{
+  "permissions": {
+    "allow": ["Bash(git status)"]
+  }
+}
+"#,
+    );
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[adapters]
+enabled = ["claude"]
+
+[launch_hooks]
+sync_on_startup = true
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.local.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        settings["permissions"]["allow"][0].as_str(),
+        Some("Bash(git status)")
+    );
+    assert_eq!(
+        settings["hooks"]["SessionStart"][0]["matcher"].as_str(),
+        Some("startup")
+    );
+    assert_eq!(
+        settings["hooks"]["SessionStart"][0]["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|hook| {
+                hook["type"].as_str() == Some("command")
+                    && hook["command"].as_str() == Some("./.claude/hooks/nodus-sync.sh")
+            })
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn sync_warns_when_launch_hooks_are_unsupported_for_selected_adapters() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
@@ -6872,6 +6937,42 @@ fn doctor_repairs_invalid_managed_mcp_json_when_it_owns_the_file() {
     sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
 
     write_file(&temp.path().join(".mcp.json"), "{");
+
+    let summary = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Repair,
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    assert_eq!(summary.status, DoctorStatus::Fixed);
+    assert!(
+        summary
+            .applied_actions
+            .iter()
+            .any(|action| action.message.contains("rewrote managed output"))
+    );
+}
+
+#[test]
+fn doctor_repairs_invalid_managed_claude_local_settings_when_it_owns_the_file() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[adapters]
+enabled = ["claude"]
+
+[launch_hooks]
+sync_on_startup = true
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    write_file(&temp.path().join(".claude/settings.local.json"), "{");
 
     let summary = doctor_in_dir_with_mode(
         temp.path(),

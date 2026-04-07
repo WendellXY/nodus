@@ -279,9 +279,18 @@ pub(super) fn find_unmanaged_collision(
 }
 
 fn allows_managed_merge(project_root: &Path, path: &Path) -> bool {
-    path == project_root.join(".mcp.json")
-        || path == project_root.join("opencode.json")
-        || path == project_root.join(".codex/config.toml")
+    managed_merge_paths(project_root).contains(path)
+}
+
+pub(super) fn managed_merge_paths(project_root: &Path) -> HashSet<PathBuf> {
+    [
+        project_root.join(".claude/settings.local.json"),
+        project_root.join(".mcp.json"),
+        project_root.join("opencode.json"),
+        project_root.join(".codex/config.toml"),
+    ]
+    .into_iter()
+    .collect()
 }
 
 pub(super) fn find_managed_collision(

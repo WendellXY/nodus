@@ -9,9 +9,9 @@ use serde::Serialize;
 use super::resolve::{resolve_project, validate_git_package};
 use super::support::{
     build_sync_execution_plan, execute_sync_plan, find_managed_collision, find_unmanaged_collision,
-    load_owned_paths, managed_path_is_owned, planned_workspace_marketplace_files,
-    recover_runtime_owned_paths_from_disk, remove_path_and_empty_parents,
-    unmanaged_collision_guidance, validate_state_consistency,
+    load_owned_paths, managed_merge_paths, managed_path_is_owned,
+    planned_workspace_marketplace_files, recover_runtime_owned_paths_from_disk,
+    remove_path_and_empty_parents, unmanaged_collision_guidance, validate_state_consistency,
 };
 use super::{Resolution, ResolveMode, SyncMode, lockfile_out_of_date_message};
 use crate::adapters::{Adapters, ManagedFile, build_output_plan};
@@ -531,13 +531,7 @@ fn unmanaged_missing_lockfile_merge_collisions(
     owned_paths: &HashSet<PathBuf>,
     planned_files: &[ManagedFile],
 ) -> Vec<PathBuf> {
-    let managed_merge_paths = [
-        runtime_root.join(".mcp.json"),
-        runtime_root.join("opencode.json"),
-        runtime_root.join(".codex/config.toml"),
-    ]
-    .into_iter()
-    .collect::<HashSet<_>>();
+    let managed_merge_paths = managed_merge_paths(runtime_root);
     let mut collisions = planned_files
         .iter()
         .map(|file| &file.path)
@@ -555,6 +549,10 @@ fn invalid_owned_output_path(
     owned_paths: &HashSet<PathBuf>,
 ) -> Option<PathBuf> {
     [
+        (
+            runtime_root.join(".claude/settings.local.json"),
+            "failed to parse existing",
+        ),
         (runtime_root.join(".mcp.json"), "failed to parse MCP config"),
         (
             runtime_root.join("opencode.json"),
