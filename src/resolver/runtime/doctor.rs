@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
@@ -145,6 +145,9 @@ struct TtyDoctorPrompt;
 
 impl DoctorPrompt for TtyDoctorPrompt {
     fn confirm(&mut self, action: &DoctorAction) -> Result<bool> {
+        if !should_prompt_for_doctor_action() {
+            return Ok(false);
+        }
         let stdin = io::stdin();
         let mut input = stdin.lock();
         let stderr = io::stderr();
@@ -626,6 +629,10 @@ fn doctor_run_mode(mode: DoctorMode) -> DoctorRunMode {
         DoctorMode::Repair => DoctorRunMode::Apply,
         DoctorMode::Force => DoctorRunMode::ApplyForce,
     }
+}
+
+fn should_prompt_for_doctor_action() -> bool {
+    !cfg!(test) && io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
 fn prompt_for_doctor_action(
