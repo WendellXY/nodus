@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -85,9 +84,7 @@ struct EmittedMcpServerConfig {
 }
 
 fn managed_nodus_command() -> String {
-    resolve_path_command("nodus")
-        .or_else(|| env::current_exe().ok().map(|path| display_path(&path)))
-        .unwrap_or_else(|| "nodus".to_string())
+    "nodus".to_string()
 }
 
 fn managed_nodus_args(self_store_root: Option<&Path>) -> Vec<String> {
@@ -99,42 +96,6 @@ fn managed_nodus_args(self_store_root: Option<&Path>) -> Vec<String> {
     args.push("mcp".to_string());
     args.push("serve".to_string());
     args
-}
-
-fn resolve_path_command(command: &str) -> Option<String> {
-    let path_var = env::var_os("PATH")?;
-    for directory in env::split_paths(&path_var) {
-        for candidate in executable_candidates(directory.join(command)) {
-            if candidate.is_file() {
-                return Some(display_path(&candidate));
-            }
-        }
-    }
-    None
-}
-
-#[cfg(not(windows))]
-fn executable_candidates(path: PathBuf) -> Vec<PathBuf> {
-    vec![path]
-}
-
-#[cfg(windows)]
-fn executable_candidates(path: PathBuf) -> Vec<PathBuf> {
-    let pathext =
-        env::var_os("PATHEXT").unwrap_or_else(|| std::ffi::OsString::from(".COM;.EXE;.BAT;.CMD"));
-    let mut candidates = vec![path.clone()];
-    if path.extension().is_some() {
-        return candidates;
-    }
-
-    for extension in pathext.to_string_lossy().split(';') {
-        let trimmed = extension.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        candidates.push(path.with_extension(trimmed.trim_start_matches('.')));
-    }
-    candidates
 }
 
 pub(crate) fn build_output_plan(
@@ -1479,9 +1440,8 @@ mod tests {
     }
 
     #[test]
-    fn managed_nodus_command_prefers_resolved_path_or_current_exe() {
+    fn managed_nodus_command_uses_plain_binary_name() {
         let command = managed_nodus_command();
-        assert!(!command.is_empty());
-        assert!(command.contains("nodus"));
+        assert_eq!(command, "nodus");
     }
 }
