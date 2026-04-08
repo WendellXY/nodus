@@ -10,7 +10,10 @@ pub(super) fn uses_json_output(command: &Command) -> bool {
         Command::List { json }
         | Command::Info { json, .. }
         | Command::Outdated { json }
-        | Command::Doctor { json, .. } => *json,
+        | Command::Doctor { json, .. }
+        | Command::Mcp {
+            command: super::args::McpCommand::Status { json },
+        } => *json,
         _ => false,
     }
 }

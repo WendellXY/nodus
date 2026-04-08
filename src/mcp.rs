@@ -1,7 +1,9 @@
 mod handlers;
 mod server;
+mod status;
 mod tools;
 
+pub use status::{McpOverallStatus, inspect_status_in_dir, render_status};
 pub use tools::*;
 
 use std::path::PathBuf;

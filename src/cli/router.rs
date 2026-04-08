@@ -193,6 +193,7 @@ pub(super) fn run_command_in_dir(
         ),
         Command::Mcp { command } => match command {
             crate::cli::args::McpCommand::Serve => mcp::handle_mcp_serve(&context),
+            crate::cli::args::McpCommand::Status { json } => mcp::handle_mcp_status(&context, json),
         },
     }
 }

@@ -272,3 +272,9 @@ Example MCP config entry:
       "args": ["mcp", "serve"]
     }
   }"#;
+
+pub(super) const MCP_STATUS_ABOUT: &str = "Inspect managed MCP config wiring for this project";
+
+pub(super) const MCP_STATUS_LONG_ABOUT: &str = r#"Inspect the current project's managed MCP config files and report whether the auto-registered `nodus` server entry is present and correctly wired.
+
+Checks the project `.mcp.json`, `.codex/config.toml`, and `opencode.json` files, then compares any discovered `nodus` entry against the expected `nodus mcp serve` command."#;

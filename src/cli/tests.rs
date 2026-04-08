@@ -10,7 +10,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
-use super::args::{Cli, Command};
+use super::args::{Cli, Command, McpCommand};
 use super::output::should_auto_check_for_updates;
 use super::router::run_command_in_dir;
 use crate::adapters::Adapter;
@@ -432,6 +432,18 @@ fn doctor_command_rejects_invalid_flag_combinations() {
         missing_apply.kind(),
         clap::error::ErrorKind::MissingRequiredArgument
     );
+}
+
+#[test]
+fn mcp_status_command_parses_json_flag() {
+    let cli = Cli::try_parse_from(["nodus", "mcp", "status", "--json"]).unwrap();
+
+    assert!(matches!(
+        cli.command,
+        Command::Mcp {
+            command: McpCommand::Status { json: true }
+        }
+    ));
 }
 
 #[test]
@@ -2329,6 +2341,54 @@ fn doctor_command_emits_json_without_status_lines() {
     assert_eq!(json["warnings"], serde_json::json!([]));
     assert!(!output.contains("Checking"));
     assert!(!output.contains("Finished"));
+}
+
+#[test]
+fn mcp_status_reports_missing_and_misconfigured_configs() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    write_file(&temp.path().join("nodus.toml"), "name = \"Example\"\n");
+    fs::create_dir_all(temp.path().join(".codex")).unwrap();
+    write_file(
+        &temp.path().join(".codex/config.toml"),
+        "[mcp_servers.nodus]\ncommand = \"cargo\"\nargs = [\"run\"]\n",
+    );
+
+    let output = run_command_output(
+        Command::Mcp {
+            command: McpCommand::Status { json: false },
+        },
+        temp.path(),
+        cache.path(),
+    );
+
+    assert!(output.contains("Project root:"));
+    assert!(output.contains(".mcp.json: not found"));
+    assert!(output.contains(".codex/config.toml: expected `nodus mcp serve` (cargo run)"));
+    assert!(output.contains("opencode.json: not found"));
+}
+
+#[test]
+fn mcp_status_emits_json_summary() {
+    let temp = TempDir::new().unwrap();
+    let cache = TempDir::new().unwrap();
+    write_file(
+        &temp.path().join(".mcp.json"),
+        r#"{"mcpServers":{"nodus":{"command":"nodus","args":["mcp","serve"]}}}"#,
+    );
+
+    let output = run_command_output(
+        Command::Mcp {
+            command: McpCommand::Status { json: true },
+        },
+        temp.path(),
+        cache.path(),
+    );
+    let json: Value = serde_json::from_str(&output).unwrap();
+
+    assert_eq!(json["summary"]["overall_status"], "healthy");
+    assert_eq!(json["summary"]["configured_count"], 1);
+    assert_eq!(json["configs"][0]["state"], "configured");
 }
 
 #[test]
