@@ -1188,6 +1188,37 @@ mod tests {
         create_remote_dependency_named("playbook-ios")
     }
 
+    fn create_learning_dependency() -> (TempDir, PathBuf) {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("playbook-learning");
+        fs::create_dir_all(&repo_path).unwrap();
+        write_file(
+            &repo_path.join("nodus.toml"),
+            r#"
+name = "learning"
+
+[adapters]
+enabled = ["claude"]
+
+[[managed_exports]]
+source = "learnings"
+target = "learnings"
+placement = "project"
+"#,
+        );
+        write_file(
+            &repo_path.join("learnings/general.md"),
+            "# General Learnings\n",
+        );
+        write_file(
+            &repo_path.join("rules/learning.md"),
+            "Record learnings under the managed export.\n",
+        );
+        init_git_repo(&repo_path);
+        run_git(&repo_path, &["tag", "v0.1.0"]);
+        (temp, repo_path)
+    }
+
     fn create_versioned_dependency_with_same_skill() -> (TempDir, PathBuf) {
         let (temp, repo_path) = create_remote_dependency_named("playbook-versioned");
         write_file(&repo_path.join("README.md"), "# Version two\n");
@@ -1737,6 +1768,65 @@ target = "docs/templates"
             fs::read_to_string(linked_repo.join("templates/nested/tips.md"))
                 .unwrap()
                 .ends_with("\nRelay tips update.\n")
+        );
+    }
+
+    #[test]
+    fn relay_writes_back_new_files_inside_package_managed_export_directory() {
+        let (_remote_root, remote_repo) = create_learning_dependency();
+        let linked = clone_linked_repo(&remote_repo);
+        let linked_repo = linked.path().join("linked");
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        write_file(
+            &project.path().join("nodus.toml"),
+            &format!(
+                r#"
+[adapters]
+enabled = ["claude"]
+
+[dependencies.learning]
+url = "{}"
+tag = "v0.1.0"
+"#,
+                toml_path_value(&remote_repo)
+            ),
+        );
+
+        sync_project(project.path(), cache.path(), &[Adapter::Claude]);
+
+        append_file(
+            &project.path().join("learnings/general.md"),
+            "\nRelay learning index update.\n",
+        );
+        write_file(
+            &project
+                .path()
+                .join("learnings/log/20260408/LRN-20260408-1000.md"),
+            "# New learning\n",
+        );
+
+        let summary = relay_dependency_in_dir(
+            project.path(),
+            cache.path(),
+            "learning",
+            Some(&linked_repo),
+            None,
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.created_file_count, 1);
+        assert_eq!(summary.updated_file_count, 1);
+        assert!(
+            fs::read_to_string(linked_repo.join("learnings/general.md"))
+                .unwrap()
+                .ends_with("\nRelay learning index update.\n")
+        );
+        assert_eq!(
+            fs::read_to_string(linked_repo.join("learnings/log/20260408/LRN-20260408-1000.md"))
+                .unwrap(),
+            "# New learning\n"
         );
     }
 

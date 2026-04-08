@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -136,6 +137,11 @@ pub(super) fn build_mappings(
     }
 
     for mapping in package.managed_paths() {
+        let known_targets = mapping
+            .files
+            .iter()
+            .map(|file| file.target_relative.clone())
+            .collect::<BTreeSet<_>>();
         for file in &mapping.files {
             mappings.push(file_mapping(
                 project_root.join(&file.target_relative),
@@ -144,6 +150,38 @@ pub(super) fn build_mappings(
                 file.source_relative.to_string_lossy().into_owned(),
                 RelayTransform::None,
             ));
+        }
+        let is_directory = mapping.files.is_empty()
+            || mapping
+                .files
+                .iter()
+                .any(|file| file.target_relative != mapping.target_root);
+        if is_directory {
+            let managed_root = project_root.join(&mapping.target_root);
+            if managed_root.is_dir() {
+                for entry in walkdir::WalkDir::new(&managed_root) {
+                    let entry = entry?;
+                    if !entry.file_type().is_file() {
+                        continue;
+                    }
+                    let relative =
+                        strip_path_prefix(entry.path(), &managed_root).with_context(|| {
+                            format!("failed to make {} relative", entry.path().display())
+                        })?;
+                    let target_relative = mapping.target_root.join(relative);
+                    if known_targets.contains(&target_relative) {
+                        continue;
+                    }
+                    let source_relative = mapping.source_root.join(relative);
+                    mappings.push(file_mapping(
+                        entry.path().to_path_buf(),
+                        None,
+                        linked_repo.join(&source_relative),
+                        source_relative.to_string_lossy().into_owned(),
+                        RelayTransform::None,
+                    ));
+                }
+            }
         }
     }
     Ok(mappings)
