@@ -87,15 +87,8 @@ fn managed_nodus_command() -> String {
     "nodus".to_string()
 }
 
-fn managed_nodus_args(self_store_root: Option<&Path>) -> Vec<String> {
-    let mut args = Vec::new();
-    if let Some(store_root) = self_store_root {
-        args.push("--store-path".to_string());
-        args.push(display_path(store_root));
-    }
-    args.push("mcp".to_string());
-    args.push("serve".to_string());
-    args
+fn managed_nodus_args() -> Vec<String> {
+    vec!["mcp".to_string(), "serve".to_string()]
 }
 
 pub(crate) fn build_output_plan(
@@ -104,7 +97,6 @@ pub(crate) fn build_output_plan(
     selected_adapters: Adapters,
     existing_lockfile: Option<&Lockfile>,
     merge_existing_mcp: bool,
-    self_store_root: Option<&Path>,
 ) -> Result<OutputPlan> {
     let mut plan = OutputAccumulator::default();
     let managed_names =
@@ -485,7 +477,6 @@ pub(crate) fn build_output_plan(
         packages,
         existing_lockfile,
         merge_existing_mcp,
-        self_store_root,
     )? {
         plan.managed_files
             .insert(display_relative(project_root, &file.path));
@@ -498,7 +489,6 @@ pub(crate) fn build_output_plan(
             existing_lockfile,
             merge_existing_mcp,
             root_launch_sync_enabled,
-            self_store_root,
         )?
     {
         plan.managed_files
@@ -512,7 +502,6 @@ pub(crate) fn build_output_plan(
             existing_lockfile,
             merge_existing_mcp,
             &mut plan.warnings,
-            self_store_root,
         )?
     {
         plan.managed_files
@@ -658,7 +647,6 @@ fn mcp_config_file(
     packages: &[(ResolvedPackage, PathBuf)],
     existing_lockfile: Option<&Lockfile>,
     merge_existing_mcp: bool,
-    self_store_root: Option<&Path>,
 ) -> Result<Option<ManagedFile>> {
     let path = project_root.join(".mcp.json");
     let previously_managed = existing_lockfile
@@ -684,7 +672,7 @@ fn mcp_config_file(
 
     // Auto-register the nodus CLI itself as an MCP server.
     let nodus_command = managed_nodus_command();
-    let nodus_args = managed_nodus_args(self_store_root);
+    let nodus_args = managed_nodus_args();
     desired_servers.insert(
         "nodus".to_string(),
         EmittedMcpServerConfig {
@@ -736,7 +724,6 @@ fn codex_mcp_config_file(
     existing_lockfile: Option<&Lockfile>,
     merge_existing_mcp: bool,
     emit_launch_sync: bool,
-    self_store_root: Option<&Path>,
 ) -> Result<Option<ManagedFile>> {
     let path = project_root.join(".codex/config.toml");
     let previously_managed = existing_lockfile
@@ -768,7 +755,7 @@ fn codex_mcp_config_file(
         table.insert(
             "args".into(),
             TomlValue::Array(
-                managed_nodus_args(self_store_root)
+                managed_nodus_args()
                     .into_iter()
                     .map(TomlValue::String)
                     .collect(),
@@ -915,7 +902,6 @@ fn opencode_mcp_config_file(
     existing_lockfile: Option<&Lockfile>,
     merge_existing_mcp: bool,
     warnings: &mut Vec<String>,
-    self_store_root: Option<&Path>,
 ) -> Result<Option<ManagedFile>> {
     let path = project_root.join("opencode.json");
     let previously_managed = existing_lockfile
@@ -951,7 +937,7 @@ fn opencode_mcp_config_file(
             "command".into(),
             JsonValue::Array(
                 std::iter::once(nodus_command)
-                    .chain(managed_nodus_args(self_store_root))
+                    .chain(managed_nodus_args())
                     .map(JsonValue::String)
                     .collect(),
             ),
