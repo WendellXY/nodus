@@ -160,6 +160,13 @@ async fn watch_dependencies_in_dir_impl_with_options(
             return Ok(summaries);
         }
 
+        let remaining_until_deadline =
+            deadline.map(|instant| instant.saturating_duration_since(tokio::time::Instant::now()));
+        let fallback_wait = fallback_wait_interval(
+            invocation.options.fallback_interval,
+            remaining_until_deadline,
+        );
+
         // Wait for a notify event, fallback timeout, deadline, or ctrl-c.
         tokio::select! {
             _ = rx.recv() => {
@@ -167,7 +174,7 @@ async fn watch_dependencies_in_dir_impl_with_options(
                 tokio::time::sleep(invocation.options.debounce).await;
                 while rx.try_recv().is_ok() {}
             }
-            _ = tokio::time::sleep(invocation.options.fallback_interval) => {}
+            _ = tokio::time::sleep(fallback_wait) => {}
             _ = async {
                 match deadline {
                     Some(d) => tokio::time::sleep_until(d).await,
@@ -331,6 +338,24 @@ fn capture_watch_state(
     Ok(RelayWatchState { config, managed })
 }
 
+fn fallback_wait_interval(
+    fallback_interval: Duration,
+    remaining_until_deadline: Option<Duration>,
+) -> Duration {
+    const MIN_DEADLINE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+    match remaining_until_deadline {
+        None => fallback_interval,
+        Some(remaining) if remaining.is_zero() => Duration::ZERO,
+        Some(remaining) => {
+            let deadline_interval = (remaining / 2)
+                .max(MIN_DEADLINE_POLL_INTERVAL)
+                .min(remaining);
+            fallback_interval.min(deadline_interval)
+        }
+    }
+}
+
 fn path_fingerprint(path: &Path) -> Result<PathFingerprint> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
@@ -353,4 +378,34 @@ fn path_fingerprint(path: &Path) -> Result<PathFingerprint> {
         .with_context(|| format!("failed to read watched file {}", path.display()))?;
     let hash: [u8; 32] = *blake3::hash(&contents).as_bytes();
     Ok(PathFingerprint::File(hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fallback_wait_interval;
+    use std::time::Duration;
+
+    #[test]
+    fn keeps_configured_poll_interval_without_deadline() {
+        assert_eq!(
+            fallback_wait_interval(Duration::from_secs(30), None),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn caps_poll_interval_to_leave_time_before_deadline() {
+        assert_eq!(
+            fallback_wait_interval(Duration::from_secs(30), Some(Duration::from_secs(5))),
+            Duration::from_millis(2500)
+        );
+    }
+
+    #[test]
+    fn keeps_shorter_poll_interval_when_it_already_fits_before_deadline() {
+        assert_eq!(
+            fallback_wait_interval(Duration::from_millis(100), Some(Duration::from_secs(5))),
+            Duration::from_millis(100)
+        );
+    }
 }
