@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -81,6 +82,48 @@ struct EmittedMcpServerConfig {
     headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
+}
+
+fn managed_nodus_command() -> String {
+    resolve_path_command("nodus")
+        .or_else(|| env::current_exe().ok().map(|path| display_path(&path)))
+        .unwrap_or_else(|| "nodus".to_string())
+}
+
+fn resolve_path_command(command: &str) -> Option<String> {
+    let path_var = env::var_os("PATH")?;
+    for directory in env::split_paths(&path_var) {
+        for candidate in executable_candidates(directory.join(command)) {
+            if candidate.is_file() {
+                return Some(display_path(&candidate));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn executable_candidates(path: PathBuf) -> Vec<PathBuf> {
+    vec![path]
+}
+
+#[cfg(windows)]
+fn executable_candidates(path: PathBuf) -> Vec<PathBuf> {
+    let pathext =
+        env::var_os("PATHEXT").unwrap_or_else(|| std::ffi::OsString::from(".COM;.EXE;.BAT;.CMD"));
+    let mut candidates = vec![path.clone()];
+    if path.extension().is_some() {
+        return candidates;
+    }
+
+    for extension in pathext.to_string_lossy().split(';') {
+        let trimmed = extension.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        candidates.push(path.with_extension(trimmed.trim_start_matches('.')));
+    }
+    candidates
 }
 
 pub(crate) fn build_output_plan(
@@ -663,11 +706,12 @@ fn mcp_config_file(
     }
 
     // Auto-register the nodus CLI itself as an MCP server.
+    let nodus_command = managed_nodus_command();
     desired_servers.insert(
         "nodus".to_string(),
         EmittedMcpServerConfig {
             transport_type: None,
-            command: Some("nodus".to_string()),
+            command: Some(nodus_command),
             url: None,
             args: vec!["mcp".to_string(), "serve".to_string()],
             env: BTreeMap::new(),
@@ -739,8 +783,9 @@ fn codex_mcp_config_file(
 
     // Auto-register the nodus CLI itself as an MCP server.
     {
+        let nodus_command = managed_nodus_command();
         let mut table = toml::map::Map::new();
-        table.insert("command".into(), TomlValue::String("nodus".into()));
+        table.insert("command".into(), TomlValue::String(nodus_command));
         table.insert(
             "args".into(),
             TomlValue::Array(vec![
@@ -917,12 +962,13 @@ fn opencode_mcp_config_file(
 
     // Auto-register the nodus CLI itself as an MCP server.
     {
+        let nodus_command = managed_nodus_command();
         let mut object = JsonMap::new();
         object.insert("type".into(), JsonValue::String("local".into()));
         object.insert(
             "command".into(),
             JsonValue::Array(vec![
-                JsonValue::String("nodus".into()),
+                JsonValue::String(nodus_command),
                 JsonValue::String("mcp".into()),
                 JsonValue::String("serve".into()),
             ]),
@@ -1408,5 +1454,12 @@ mod tests {
             "Bearer {env:API_KEY}"
         );
         assert_eq!(emitted_opencode_header_value("us-east-1"), "us-east-1");
+    }
+
+    #[test]
+    fn managed_nodus_command_prefers_resolved_path_or_current_exe() {
+        let command = managed_nodus_command();
+        assert!(!command.is_empty());
+        assert!(command.contains("nodus"));
     }
 }

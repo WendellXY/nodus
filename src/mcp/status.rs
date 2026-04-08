@@ -21,6 +21,7 @@ pub enum McpStatusState {
     Configured,
     NotFound,
     MissingServer,
+    PathDependent,
     Misconfigured,
     ParseError,
 }
@@ -110,6 +111,7 @@ pub fn inspect_status_in_dir(project_root: &Path) -> Result<McpStatusReport> {
             matches!(
                 status.state,
                 McpStatusState::MissingServer
+                    | McpStatusState::PathDependent
                     | McpStatusState::Misconfigured
                     | McpStatusState::ParseError
             )
@@ -167,10 +169,16 @@ pub fn render_status(report: &McpStatusReport, reporter: &Reporter) -> Result<()
         reporter.line(format!("{}: {}", config.path, render_config_state(config)))?;
     }
 
-    if !report.command.found_on_path {
+    if report
+        .configs
+        .iter()
+        .any(|status| status.state == McpStatusState::PathDependent)
+    {
         reporter.note(
-            "managed MCP configs launch `nodus` by name, so the binary must be resolvable on PATH",
+            "PATH-dependent `nodus` entries can fail in GUI clients; run `nodus sync` to refresh them to an absolute path",
         )?;
+    } else if !report.command.found_on_path {
+        reporter.note("the configured nodus command is not currently resolvable on PATH")?;
     }
     if report.summary.overall_status == McpOverallStatus::NotConfigured {
         if report.manifest_exists || report.lockfile_exists {
@@ -237,12 +245,20 @@ fn inspect_project_json(project_root: &Path) -> Result<McpConfigStatus> {
 
     let observed = command_parts(server.command.as_deref(), &server.args);
     Ok(match observed.as_deref() {
-        Some(command) if command == expected_command().as_slice() => McpConfigStatus {
+        Some(command) if command_matches_project_command(command) => McpConfigStatus {
             runtime: "project".into(),
             path: display,
             exists: true,
             state: McpStatusState::Configured,
             message: "configured".into(),
+            observed_command: Some(command.to_vec()),
+        },
+        Some(command) if command == legacy_expected_command().as_slice() => McpConfigStatus {
+            runtime: "project".into(),
+            path: display,
+            exists: true,
+            state: McpStatusState::PathDependent,
+            message: "uses PATH-dependent `nodus`; run `nodus sync` to refresh".into(),
             observed_command: Some(command.to_vec()),
         },
         Some(command) => McpConfigStatus {
@@ -307,12 +323,20 @@ fn inspect_codex_config(project_root: &Path) -> Result<McpConfigStatus> {
 
     let observed = codex_command(server);
     Ok(match observed.as_deref() {
-        Some(command) if command == expected_command().as_slice() => McpConfigStatus {
+        Some(command) if command_matches_project_command(command) => McpConfigStatus {
             runtime: "codex".into(),
             path: display,
             exists: true,
             state: McpStatusState::Configured,
             message: "configured".into(),
+            observed_command: Some(command.to_vec()),
+        },
+        Some(command) if command == legacy_expected_command().as_slice() => McpConfigStatus {
+            runtime: "codex".into(),
+            path: display,
+            exists: true,
+            state: McpStatusState::PathDependent,
+            message: "uses PATH-dependent `nodus`; run `nodus sync` to refresh".into(),
             observed_command: Some(command.to_vec()),
         },
         Some(command) => McpConfigStatus {
@@ -377,12 +401,20 @@ fn inspect_opencode_config(project_root: &Path) -> Result<McpConfigStatus> {
 
     let observed = opencode_command(server);
     Ok(match observed.as_deref() {
-        Some(command) if command == EXPECTED_OPENCODE_COMMAND => McpConfigStatus {
+        Some(command) if command_matches_opencode_command(command) => McpConfigStatus {
             runtime: "opencode".into(),
             path: display,
             exists: true,
             state: McpStatusState::Configured,
             message: "configured".into(),
+            observed_command: Some(command.to_vec()),
+        },
+        Some(command) if command == EXPECTED_OPENCODE_COMMAND => McpConfigStatus {
+            runtime: "opencode".into(),
+            path: display,
+            exists: true,
+            state: McpStatusState::PathDependent,
+            message: "uses PATH-dependent `nodus`; run `nodus sync` to refresh".into(),
             observed_command: Some(command.to_vec()),
         },
         Some(command) => McpConfigStatus {
@@ -466,6 +498,37 @@ fn expected_command() -> Vec<String> {
         .collect()
 }
 
+fn legacy_expected_command() -> Vec<String> {
+    expected_command()
+}
+
+fn command_matches_project_command(command: &[String]) -> bool {
+    command.len() == EXPECTED_ARGS.len() + 1
+        && binary_looks_like_nodus(&command[0])
+        && command[1..]
+            .iter()
+            .map(String::as_str)
+            .eq(EXPECTED_ARGS.iter().copied())
+        && command[0] != EXPECTED_COMMAND
+}
+
+fn command_matches_opencode_command(command: &[String]) -> bool {
+    command.len() == EXPECTED_OPENCODE_COMMAND.len()
+        && binary_looks_like_nodus(&command[0])
+        && command[1..]
+            .iter()
+            .map(String::as_str)
+            .eq(EXPECTED_OPENCODE_COMMAND[1..].iter().copied())
+        && command[0] != EXPECTED_COMMAND
+}
+
+fn binary_looks_like_nodus(command: &str) -> bool {
+    Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == "nodus" || value.starts_with("nodus-"))
+}
+
 fn format_command(command: &[String]) -> String {
     command.join(" ")
 }
@@ -529,16 +592,29 @@ mod tests {
         let temp = TempDir::new().unwrap();
         fs::write(
             temp.path().join(".mcp.json"),
-            r#"{"mcpServers":{"nodus":{"command":"nodus","args":["mcp","serve"]}}}"#,
+            format!(
+                r#"{{"mcpServers":{{"nodus":{{"command":"{}","args":["mcp","serve"]}}}}}}"#,
+                display_path(&env::current_exe().unwrap())
+            ),
         )
         .unwrap();
 
         let status = inspect_project_json(temp.path()).unwrap();
         assert_eq!(status.state, McpStatusState::Configured);
-        assert_eq!(
-            status.observed_command,
-            Some(vec!["nodus".into(), "mcp".into(), "serve".into()])
-        );
+        assert!(status.observed_command.unwrap()[0].contains("nodus"));
+    }
+
+    #[test]
+    fn reports_path_dependent_project_json_entry() {
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join(".mcp.json"),
+            r#"{"mcpServers":{"nodus":{"command":"nodus","args":["mcp","serve"]}}}"#,
+        )
+        .unwrap();
+
+        let status = inspect_project_json(temp.path()).unwrap();
+        assert_eq!(status.state, McpStatusState::PathDependent);
     }
 
     #[test]

@@ -2374,7 +2374,10 @@ fn mcp_status_emits_json_summary() {
     let cache = TempDir::new().unwrap();
     write_file(
         &temp.path().join(".mcp.json"),
-        r#"{"mcpServers":{"nodus":{"command":"nodus","args":["mcp","serve"]}}}"#,
+        &format!(
+            r#"{{"mcpServers":{{"nodus":{{"command":"{}","args":["mcp","serve"]}}}}}}"#,
+            crate::paths::display_path(&std::env::current_exe().unwrap())
+        ),
     );
 
     let output = run_command_output(
@@ -3335,10 +3338,15 @@ local_playbook = { path = "vendor/playbook", components = ["skills"] }
         !nodus_entry.is_null(),
         "nodus entry should be present in .mcp.json"
     );
-    assert_eq!(
-        nodus_entry["command"].as_str(),
-        Some("nodus"),
-        "nodus MCP command should be \"nodus\""
+    let command = nodus_entry["command"]
+        .as_str()
+        .expect("nodus MCP command should be present");
+    assert!(
+        Path::new(command)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value == "nodus" || value.starts_with("nodus-")),
+        "nodus MCP command should point at a nodus executable: {command}"
     );
     let args: Vec<&str> = nodus_entry["args"]
         .as_array()
