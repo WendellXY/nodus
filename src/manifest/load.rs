@@ -252,6 +252,76 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
         ));
     }
 
+    if !manifest.hooks.is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        for hook in &manifest.hooks {
+            output.push_str("[[hooks]]\n");
+            output.push_str(&format!("id = {}\n", quote(&hook.id)));
+            output.push_str(&format!("event = {}\n", quote(hook.event.as_str())));
+            if !hook.adapters.is_empty() {
+                let encoded = hook
+                    .adapters
+                    .iter()
+                    .map(|adapter| quote(adapter.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                output.push_str(&format!("adapters = [{encoded}]\n"));
+            }
+            if let Some(timeout_sec) = hook.timeout_sec {
+                output.push_str(&format!("timeout_sec = {timeout_sec}\n"));
+            }
+            if hook.blocking {
+                output.push_str("blocking = true\n");
+            }
+            if let Some(matcher) = &hook.matcher
+                && (!matcher.sources.is_empty() || !matcher.tool_names.is_empty())
+            {
+                output.push_str("[hooks.matcher]\n");
+                if !matcher.sources.is_empty() {
+                    let encoded = matcher
+                        .sources
+                        .iter()
+                        .map(|source| quote(source.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output.push_str(&format!("sources = [{encoded}]\n"));
+                }
+                if !matcher.tool_names.is_empty() {
+                    let encoded = matcher
+                        .tool_names
+                        .iter()
+                        .map(|tool_name| quote(tool_name.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output.push_str(&format!("tool_names = [{encoded}]\n"));
+                }
+            }
+            output.push_str("[hooks.handler]\n");
+            output.push_str(&format!(
+                "type = {}\n",
+                quote(match hook.handler.handler_type {
+                    super::HookHandlerType::Command => "command",
+                })
+            ));
+            output.push_str(&format!(
+                "command = {}\n",
+                quote(&hook.handler.command)
+            ));
+            if !matches!(hook.handler.cwd, super::HookWorkingDirectory::GitRoot) {
+                output.push_str(&format!(
+                    "cwd = {}\n",
+                    quote(match hook.handler.cwd {
+                        super::HookWorkingDirectory::GitRoot => "git_root",
+                        super::HookWorkingDirectory::Session => "session",
+                    })
+                ));
+            }
+            output.push('\n');
+        }
+    }
+
     if let Some(workspace) = &manifest.workspace {
         if !output.is_empty() && !output.ends_with('\n') {
             output.push('\n');

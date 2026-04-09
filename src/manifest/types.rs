@@ -31,6 +31,8 @@ pub struct Manifest {
     pub adapters: Option<AdapterConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_hooks: Option<LaunchHookConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HookSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -60,6 +62,112 @@ impl AdapterConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchHookConfig {
     pub sync_on_startup: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookSpec {
+    pub id: String,
+    pub event: HookEvent,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adapters: Vec<Adapter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<HookMatcher>,
+    pub handler: HookHandler,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_sec: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub blocking: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookEvent {
+    SessionStart,
+    PreToolUse,
+    PostToolUse,
+    Stop,
+}
+
+impl HookEvent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionStart => "session_start",
+            Self::PreToolUse => "pre_tool_use",
+            Self::PostToolUse => "post_tool_use",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct HookMatcher {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<HookSessionSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_names: Vec<HookTool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookSessionSource {
+    Startup,
+    Resume,
+}
+
+impl HookSessionSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Startup => "startup",
+            Self::Resume => "resume",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookTool {
+    Bash,
+}
+
+impl HookTool {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookHandler {
+    #[serde(rename = "type")]
+    pub handler_type: HookHandlerType,
+    pub command: String,
+    #[serde(
+        default = "default_hook_working_directory",
+        skip_serializing_if = "is_default_hook_working_directory"
+    )]
+    pub cwd: HookWorkingDirectory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookHandlerType {
+    Command,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookWorkingDirectory {
+    GitRoot,
+    Session,
+}
+
+fn default_hook_working_directory() -> HookWorkingDirectory {
+    HookWorkingDirectory::GitRoot
+}
+
+fn is_default_hook_working_directory(value: &HookWorkingDirectory) -> bool {
+    *value == HookWorkingDirectory::GitRoot
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

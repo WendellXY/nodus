@@ -393,6 +393,72 @@ sync_on_startup = true
 }
 
 #[test]
+fn loads_root_manifest_hooks() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[[hooks]]
+id = "bash-preflight"
+event = "pre_tool_use"
+adapters = ["claude", "codex"]
+blocking = true
+timeout_sec = 15
+
+[hooks.matcher]
+tool_names = ["bash"]
+
+[hooks.handler]
+type = "command"
+command = "./scripts/preflight.sh"
+cwd = "session"
+"#,
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+    let hook = &loaded.manifest.hooks[0];
+
+    assert_eq!(loaded.manifest.hooks.len(), 1);
+    assert_eq!(hook.id, "bash-preflight");
+    assert_eq!(hook.event, HookEvent::PreToolUse);
+    assert_eq!(hook.adapters, vec![Adapter::Claude, Adapter::Codex]);
+    assert_eq!(hook.timeout_sec, Some(15));
+    assert!(hook.blocking);
+    assert_eq!(
+        hook.matcher.as_ref().unwrap().tool_names,
+        vec![HookTool::Bash]
+    );
+    assert_eq!(hook.handler.command, "./scripts/preflight.sh");
+    assert_eq!(hook.handler.cwd, HookWorkingDirectory::Session);
+}
+
+#[test]
+fn lowers_legacy_launch_hook_into_effective_hooks() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[launch_hooks]
+sync_on_startup = true
+"#,
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+    let hooks = loaded.manifest.effective_hooks();
+
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0].id, "nodus.sync_on_startup");
+    assert_eq!(hooks[0].event, HookEvent::SessionStart);
+    assert_eq!(
+        hooks[0].matcher.as_ref().unwrap().sources,
+        vec![HookSessionSource::Startup, HookSessionSource::Resume]
+    );
+    assert_eq!(hooks[0].handler.command, "nodus sync");
+}
+
+#[test]
 fn does_not_warn_for_supported_content_root_config() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
@@ -2541,6 +2607,41 @@ fn serializes_launch_hooks() {
 }
 
 #[test]
+fn serializes_hooks() {
+    let manifest = Manifest {
+        hooks: vec![HookSpec {
+            id: "bash-preflight".into(),
+            event: HookEvent::PreToolUse,
+            adapters: vec![Adapter::Claude, Adapter::Codex],
+            matcher: Some(HookMatcher {
+                sources: Vec::new(),
+                tool_names: vec![HookTool::Bash],
+            }),
+            handler: HookHandler {
+                handler_type: HookHandlerType::Command,
+                command: "./scripts/preflight.sh".into(),
+                cwd: HookWorkingDirectory::Session,
+            },
+            timeout_sec: Some(15),
+            blocking: true,
+        }],
+        ..Manifest::default()
+    };
+
+    let encoded = serialize_manifest(&manifest).unwrap();
+
+    assert!(encoded.contains("[[hooks]]"));
+    assert!(encoded.contains("id = \"bash-preflight\""));
+    assert!(encoded.contains("event = \"pre_tool_use\""));
+    assert!(encoded.contains("adapters = [\"claude\", \"codex\"]"));
+    assert!(encoded.contains("[hooks.matcher]"));
+    assert!(encoded.contains("tool_names = [\"bash\"]"));
+    assert!(encoded.contains("[hooks.handler]"));
+    assert!(encoded.contains("command = \"./scripts/preflight.sh\""));
+    assert!(encoded.contains("cwd = \"session\""));
+}
+
+#[test]
 fn rejects_empty_adapter_selection() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
@@ -2602,6 +2703,27 @@ sync_on_startup = false
 
     let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
     assert!(error.contains("launch_hooks.sync_on_startup"));
+}
+
+#[test]
+fn rejects_hooks_in_dependency_manifest() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[[hooks]]
+id = "bash-preflight"
+event = "pre_tool_use"
+
+[hooks.handler]
+type = "command"
+command = "./scripts/preflight.sh"
+"#,
+    );
+
+    let error = load_dependency_from_dir(temp.path()).unwrap_err().to_string();
+    assert!(error.contains("root project manifests"));
 }
 
 #[test]

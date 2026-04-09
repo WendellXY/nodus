@@ -16,8 +16,10 @@ pub use model_impls::RequestedGitRef;
 #[allow(unused_imports)]
 pub use types::{
     AdapterConfig, Capability, DependencyComponent, DependencyEntry, DependencyKind,
-    DependencySourceKind, DependencySpec, FileEntry, InitSummary, LaunchHookConfig, LoadedManifest,
-    MANIFEST_FILE, ManagedExportSpec, ManagedPathSpec, ManagedPlacement, Manifest, McpServerConfig,
-    PackageContents, PackageRole, ResolvedWorkspaceMember, SkillEntry, WorkspaceConfig,
-    WorkspaceMemberCodexSpec, WorkspaceMemberSpec, WorkspaceMemberStatus,
+    DependencySourceKind, DependencySpec, FileEntry, HookEvent, HookHandler, HookHandlerType,
+    HookMatcher, HookSessionSource, HookSpec, HookTool, HookWorkingDirectory, InitSummary,
+    LaunchHookConfig, LoadedManifest, MANIFEST_FILE, ManagedExportSpec, ManagedPathSpec,
+    ManagedPlacement, Manifest, McpServerConfig, PackageContents, PackageRole,
+    ResolvedWorkspaceMember, SkillEntry, WorkspaceConfig, WorkspaceMemberCodexSpec,
+    WorkspaceMemberSpec, WorkspaceMemberStatus,
 };

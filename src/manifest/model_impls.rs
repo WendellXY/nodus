@@ -17,6 +17,7 @@ use crate::paths::{display_path, strip_path_prefix};
 const CODEX_INSTALLATION_POLICIES: &[&str] =
     &["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"];
 const CODEX_AUTHENTICATION_POLICIES: &[&str] = &["ON_INSTALL", "ON_USE"];
+const LEGACY_SYNC_ON_STARTUP_HOOK_ID: &str = "nodus.sync_on_startup";
 
 impl LoadedManifest {
     pub fn validate(&self, role: PackageRole) -> Result<()> {
@@ -57,6 +58,7 @@ impl LoadedManifest {
         {
             bail!("manifest field `launch_hooks.sync_on_startup` must be true when set");
         }
+        validate_hooks(&self.manifest.hooks, role)?;
         if self.manifest.workspace.is_some() {
             validate_workspace(self)?;
             if !self.discovered.is_empty() {
@@ -442,6 +444,35 @@ impl Manifest {
         self.adapters = Some(AdapterConfig::normalized(adapters));
     }
 
+    pub fn effective_hooks(&self) -> Vec<HookSpec> {
+        let mut hooks = self.hooks.clone();
+        if self.sync_on_launch_enabled()
+            && !hooks.iter().any(|hook| hook.id == LEGACY_SYNC_ON_STARTUP_HOOK_ID)
+        {
+            hooks.push(Self::legacy_sync_on_startup_hook());
+        }
+        hooks
+    }
+
+    pub fn legacy_sync_on_startup_hook() -> HookSpec {
+        HookSpec {
+            id: LEGACY_SYNC_ON_STARTUP_HOOK_ID.to_string(),
+            event: HookEvent::SessionStart,
+            adapters: Vec::new(),
+            matcher: Some(HookMatcher {
+                sources: vec![HookSessionSource::Startup, HookSessionSource::Resume],
+                tool_names: Vec::new(),
+            }),
+            handler: HookHandler {
+                handler_type: HookHandlerType::Command,
+                command: "nodus sync".to_string(),
+                cwd: HookWorkingDirectory::GitRoot,
+            },
+            timeout_sec: None,
+            blocking: false,
+        }
+    }
+
     pub fn sync_on_launch_enabled(&self) -> bool {
         self.launch_hooks
             .as_ref()
@@ -479,6 +510,92 @@ impl Manifest {
 
         Ok(removed)
     }
+}
+
+fn validate_hooks(hooks: &[HookSpec], role: PackageRole) -> Result<()> {
+    if hooks.is_empty() {
+        return Ok(());
+    }
+    if !matches!(role, PackageRole::Root) {
+        bail!("manifest field `hooks` is only supported in root project manifests");
+    }
+
+    let mut ids = HashSet::new();
+    for hook in hooks {
+        if hook.id.trim().is_empty() {
+            bail!("manifest field `hooks.id` must not be empty");
+        }
+        if !ids.insert(hook.id.as_str()) {
+            bail!("manifest field `hooks` must not contain duplicate ids");
+        }
+        if hook.handler.command.trim().is_empty() {
+            bail!(
+                "manifest hook `{}` field `handler.command` must not be empty",
+                hook.id
+            );
+        }
+
+        let mut adapters = hook.adapters.clone();
+        adapters.sort();
+        adapters.dedup();
+        if adapters.len() != hook.adapters.len() {
+            bail!(
+                "manifest hook `{}` field `adapters` must not contain duplicates",
+                hook.id
+            );
+        }
+
+        if let Some(matcher) = &hook.matcher {
+            let mut sources = matcher.sources.clone();
+            sources.sort_by_key(|source| source.as_str());
+            sources.dedup_by_key(|source| source.as_str());
+            if sources.len() != matcher.sources.len() {
+                bail!(
+                    "manifest hook `{}` field `matcher.sources` must not contain duplicates",
+                    hook.id
+                );
+            }
+
+            let mut tool_names = matcher.tool_names.clone();
+            tool_names.sort_by_key(|tool_name| tool_name.as_str());
+            tool_names.dedup_by_key(|tool_name| tool_name.as_str());
+            if tool_names.len() != matcher.tool_names.len() {
+                bail!(
+                    "manifest hook `{}` field `matcher.tool_names` must not contain duplicates",
+                    hook.id
+                );
+            }
+
+            match hook.event {
+                HookEvent::SessionStart => {
+                    if !matcher.tool_names.is_empty() {
+                        bail!(
+                            "manifest hook `{}` field `matcher.tool_names` is not supported for `session_start`",
+                            hook.id
+                        );
+                    }
+                }
+                HookEvent::PreToolUse | HookEvent::PostToolUse => {
+                    if !matcher.sources.is_empty() {
+                        bail!(
+                            "manifest hook `{}` field `matcher.sources` is not supported for tool hook events",
+                            hook.id
+                        );
+                    }
+                }
+                HookEvent::Stop => {
+                    if !matcher.sources.is_empty() || !matcher.tool_names.is_empty() {
+                        bail!(
+                            "manifest hook `{}` must not declare matcher fields for `stop`",
+                            hook.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_dependency_entry(package: &LoadedManifest, entry: DependencyEntry<'_>) -> Result<()> {
