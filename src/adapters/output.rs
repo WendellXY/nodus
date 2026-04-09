@@ -110,8 +110,7 @@ pub(crate) fn build_output_plan(
     let managed_names =
         ManagedArtifactNames::from_resolved_packages(packages.iter().map(|(package, _)| package));
     let root_hooks = root_hooks(packages);
-    let emit_codex_hooks = !cfg!(windows)
-        && selected_adapters.contains(Adapter::Codex)
+    let emit_codex_hooks = selected_adapters.contains(Adapter::Codex)
         && root_hooks
             .iter()
             .any(|hook| hook_targets_adapter(hook, selected_adapters, Adapter::Codex));
@@ -1238,14 +1237,7 @@ fn hook_files(
     }
     let codex_hooks = hooks_for_adapter(hooks, selected_adapters, Adapter::Codex);
     if !codex_hooks.is_empty() {
-        if cfg!(windows) {
-            warnings.push(
-                "hooks are emitted for `codex`, but Codex hooks are currently disabled on Windows"
-                    .into(),
-            );
-        } else {
-            files.extend(super::codex::hook_files(project_root, &codex_hooks)?);
-        }
+        files.extend(super::codex::hook_files(project_root, &codex_hooks)?);
     }
     if hooks
         .iter()
