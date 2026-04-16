@@ -2,7 +2,7 @@
 name = "nodus"
 version = "0.9.3"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88.0"
 description = "Local-first CLI for managing project-scoped agent packages."
 license = "Apache-2.0"
 documentation = "https://docs.rs/nodus"

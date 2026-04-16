@@ -46,10 +46,10 @@ fn local_source_contains_nodus_manageable_content(root: &Path) -> Result<bool> {
         }
     }
 
-    if let Some(extras) = read_supported_claude_plugin_extras(root)? {
-        if extras.has_nodus_manageable_content() {
-            return Ok(true);
-        }
+    if let Some(extras) = read_supported_claude_plugin_extras(root)?
+        && extras.has_nodus_manageable_content()
+    {
+        return Ok(true);
     }
 
     Ok([
@@ -1574,12 +1574,11 @@ fn derive_explicit_file_entry_id(
     relative: &Path,
     standard_root: Option<(&str, bool)>,
 ) -> Result<String> {
-    if let Some((root, allow_nested)) = standard_root {
-        if let Ok(stripped) = relative.strip_prefix(root)
-            && (allow_nested || stripped.components().count() == 1)
-        {
-            return derive_file_entry_id(stripped);
-        }
+    if let Some((root, allow_nested)) = standard_root
+        && let Ok(stripped) = relative.strip_prefix(root)
+        && (allow_nested || stripped.components().count() == 1)
+    {
+        return derive_file_entry_id(stripped);
     }
 
     derive_file_entry_id(relative)

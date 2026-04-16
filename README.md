@@ -52,6 +52,8 @@ Install from crates.io:
 cargo install nodus
 ```
 
+Building from source requires Rust 1.88.0 or newer.
+
 Install the latest prebuilt binary on macOS or Linux:
 
 ```bash

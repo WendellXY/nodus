@@ -789,38 +789,38 @@ fn resolve_cargo_home() -> Option<PathBuf> {
 
 fn load_cargo_install_sources(cargo_home: &Path, bin_name: &str) -> Vec<String> {
     let json_path = cargo_home.join(".crates2.json");
-    if let Ok(contents) = fs::read_to_string(&json_path) {
-        if let Ok(state) = serde_json::from_str::<CargoInstallState>(&contents) {
-            let sources = state
-                .installs
-                .into_iter()
-                .filter_map(|(package_id, install)| {
-                    install
-                        .bins
-                        .iter()
-                        .any(|bin| bin == bin_name)
-                        .then_some(package_id)
-                })
-                .filter_map(|package_id| parse_cargo_source(&package_id))
-                .collect::<Vec<_>>();
-            if !sources.is_empty() {
-                return sources;
-            }
+    if let Ok(contents) = fs::read_to_string(&json_path)
+        && let Ok(state) = serde_json::from_str::<CargoInstallState>(&contents)
+    {
+        let sources = state
+            .installs
+            .into_iter()
+            .filter_map(|(package_id, install)| {
+                install
+                    .bins
+                    .iter()
+                    .any(|bin| bin == bin_name)
+                    .then_some(package_id)
+            })
+            .filter_map(|package_id| parse_cargo_source(&package_id))
+            .collect::<Vec<_>>();
+        if !sources.is_empty() {
+            return sources;
         }
     }
 
     let toml_path = cargo_home.join(".crates.toml");
-    if let Ok(contents) = fs::read_to_string(&toml_path) {
-        if let Ok(state) = toml::from_str::<LegacyCargoInstallState>(&contents) {
-            return state
-                .v1
-                .into_iter()
-                .filter_map(|(package_id, bins)| {
-                    bins.iter().any(|bin| bin == bin_name).then_some(package_id)
-                })
-                .filter_map(|package_id| parse_cargo_source(&package_id))
-                .collect();
-        }
+    if let Ok(contents) = fs::read_to_string(&toml_path)
+        && let Ok(state) = toml::from_str::<LegacyCargoInstallState>(&contents)
+    {
+        return state
+            .v1
+            .into_iter()
+            .filter_map(|(package_id, bins)| {
+                bins.iter().any(|bin| bin == bin_name).then_some(package_id)
+            })
+            .filter_map(|package_id| parse_cargo_source(&package_id))
+            .collect();
     }
 
     Vec::new()

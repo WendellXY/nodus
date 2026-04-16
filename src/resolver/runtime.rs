@@ -417,14 +417,14 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
     } else {
         None
     };
-    if let Some(lockfile) = existing_lockfile.as_ref() {
-        if !lockfile.uses_current_schema() {
-            reporter.note(format!(
-                "upgrading {LOCKFILE_NAME} from version {} to {}",
-                lockfile.version,
-                Lockfile::current_version()
-            ))?;
-        }
+    if let Some(lockfile) = existing_lockfile.as_ref()
+        && !lockfile.uses_current_schema()
+    {
+        reporter.note(format!(
+            "upgrading {LOCKFILE_NAME} from version {} to {}",
+            lockfile.version,
+            Lockfile::current_version()
+        ))?;
     }
     if sync_mode.installs_from_lockfile() && existing_lockfile.is_none() {
         bail!(

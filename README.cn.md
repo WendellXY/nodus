@@ -52,6 +52,8 @@ nodus doctor
 cargo install nodus
 ```
 
+从源码构建需要 Rust 1.88.0 或更高版本。
+
 在 macOS 或 Linux 上安装最新预构建版本：
 
 ```bash
