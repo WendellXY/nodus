@@ -1847,6 +1847,7 @@ pub(super) fn collect_ignored_field_warnings(table: &Table) -> Vec<String> {
         "capabilities",
         "mcp_servers",
         "adapters",
+        "hooks",
         "launch_hooks",
         "workspace",
         "dependencies",
