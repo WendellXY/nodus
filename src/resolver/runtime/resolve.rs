@@ -7,12 +7,12 @@ use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
 
 use super::{
-    ManagedMappingMigration, PackageSource, Resolution, ResolveMode, ResolvedManagedFile,
-    ResolvedManagedPath, ResolvedManagedPathOrigin, ResolvedPackage,
+    DependencyFailureMode, ManagedMappingMigration, PackageSource, Resolution, ResolveMode,
+    ResolvedManagedFile, ResolvedManagedPath, ResolvedManagedPathOrigin, ResolvedPackage,
 };
 use crate::git::{
-    current_rev, ensure_git_dependency, ensure_git_dependency_at_rev, shared_checkout_path,
-    shared_repository_path, validate_shared_checkout,
+    GitCheckout, current_rev, ensure_git_dependency, ensure_git_dependency_at_rev,
+    shared_checkout_path, shared_repository_path, validate_shared_checkout,
 };
 use crate::lockfile::{LOCKFILE_NAME, LockedSource, Lockfile};
 use crate::manifest::{
@@ -27,14 +27,17 @@ struct ResolverState {
     stack: Vec<PathBuf>,
     resolved_by_path: HashMap<PathBuf, ResolvedPackage>,
     managed_migrations: Vec<ManagedMappingMigration>,
+    warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
 struct ResolveContext<'a> {
     cache_root: &'a Path,
     mode: ResolveMode,
+    existing_lockfile: Option<&'a Lockfile>,
     frozen_lockfile: Option<&'a Lockfile>,
     root_override: Option<&'a LoadedManifest>,
+    dependency_failure_mode: DependencyFailureMode,
     reporter: &'a Reporter,
 }
 
@@ -104,8 +107,10 @@ pub(super) fn resolve_project(
     cache_root: &Path,
     mode: ResolveMode,
     reporter: &Reporter,
+    existing_lockfile: Option<&Lockfile>,
     frozen_lockfile: Option<&Lockfile>,
     root_override: Option<&LoadedManifest>,
+    dependency_failure_mode: DependencyFailureMode,
 ) -> Result<Resolution> {
     let project_root = if let Some(root_override) = root_override {
         root_override.root.clone()
@@ -115,8 +120,10 @@ pub(super) fn resolve_project(
     let context = ResolveContext {
         cache_root,
         mode,
+        existing_lockfile,
         frozen_lockfile,
         root_override,
+        dependency_failure_mode,
         reporter,
     };
     let mut state = ResolverState::default();
@@ -143,10 +150,11 @@ pub(super) fn resolve_project(
             .then(left.root.cmp(&right.root))
     });
 
-    let warnings = packages
+    let mut warnings = packages
         .iter()
         .flat_map(|package| package.manifest.warnings.iter().cloned())
-        .collect();
+        .collect::<Vec<_>>();
+    warnings.extend(state.warnings);
 
     Ok(Resolution {
         packages,
@@ -330,38 +338,14 @@ fn resolve_dependency(
         DependencySourceKind::Git => {
             let url = dependency.resolved_git_url()?;
             let requested_ref = dependency.requested_git_ref_or_none()?;
-            let checkout = if let Some(lockfile) = context.frozen_lockfile {
-                let locked = locked_git_source(
-                    lockfile,
-                    alias,
-                    &url,
-                    dependency.subpath.as_deref(),
-                    requested_ref,
-                )?;
-                let rev = locked.rev.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "dependency `{alias}` in {} does not record a git revision",
-                        LOCKFILE_NAME
-                    )
-                })?;
-                ensure_git_dependency_at_rev(
-                    context.cache_root,
-                    &url,
-                    locked.tag.as_deref(),
-                    locked.branch.as_deref(),
-                    rev,
-                    context.mode == ResolveMode::Sync,
-                    context.reporter,
-                )?
-            } else {
-                ensure_git_dependency(
-                    context.cache_root,
-                    &url,
-                    requested_ref,
-                    context.mode == ResolveMode::Sync,
-                    context.reporter,
-                )?
-            };
+            let checkout = resolve_git_dependency_checkout(
+                alias,
+                dependency,
+                &url,
+                requested_ref,
+                context,
+                state,
+            )?;
             let dependency_root =
                 resolve_git_dependency_root(alias, &checkout.path, dependency.subpath.as_deref())?;
             let source = PackageSource::Git {
@@ -404,6 +388,99 @@ fn resolve_dependency(
             )
         }
     }
+}
+
+fn resolve_git_dependency_checkout(
+    alias: &str,
+    dependency: &DependencySpec,
+    url: &str,
+    requested_ref: Option<RequestedGitRef<'_>>,
+    context: &ResolveContext<'_>,
+    state: &mut ResolverState,
+) -> Result<GitCheckout> {
+    let live_checkout = if let Some(lockfile) = context.frozen_lockfile {
+        let locked = locked_git_source(
+            lockfile,
+            alias,
+            url,
+            dependency.subpath.as_deref(),
+            requested_ref,
+        )?;
+        let rev = locked.rev.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "dependency `{alias}` in {} does not record a git revision",
+                LOCKFILE_NAME
+            )
+        })?;
+        ensure_git_dependency_at_rev(
+            context.cache_root,
+            url,
+            locked.tag.as_deref(),
+            locked.branch.as_deref(),
+            rev,
+            context.mode == ResolveMode::Sync,
+            context.reporter,
+        )
+    } else {
+        ensure_git_dependency(
+            context.cache_root,
+            url,
+            requested_ref,
+            context.mode == ResolveMode::Sync,
+            context.reporter,
+        )
+    };
+
+    match live_checkout {
+        Ok(checkout) => Ok(checkout),
+        Err(error)
+            if context.mode == ResolveMode::Sync
+                && context.dependency_failure_mode == DependencyFailureMode::Graceful =>
+        {
+            let Some(existing_lockfile) = context.existing_lockfile else {
+                return Err(error);
+            };
+            let locked = match locked_git_source(
+                existing_lockfile,
+                alias,
+                url,
+                dependency.subpath.as_deref(),
+                requested_ref,
+            ) {
+                Ok(locked) => locked,
+                Err(_) => return Err(error),
+            };
+            let rev = match locked.rev.as_deref() {
+                Some(rev) => rev,
+                None => return Err(error),
+            };
+            match ensure_git_dependency_at_rev(
+                context.cache_root,
+                url,
+                locked.tag.as_deref(),
+                locked.branch.as_deref(),
+                rev,
+                false,
+                context.reporter,
+            ) {
+                Ok(checkout) => {
+                    state.warnings.push(format!(
+                        "dependency `{alias}` could not be refreshed from {url}: {}; reusing locked cached revision {} from {}",
+                        error,
+                        short_rev(rev),
+                        LOCKFILE_NAME
+                    ));
+                    Ok(checkout)
+                }
+                Err(_) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn short_rev(rev: &str) -> String {
+    rev.chars().take(12).collect()
 }
 
 fn locked_git_source<'a>(

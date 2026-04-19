@@ -20,6 +20,7 @@ pub(crate) struct SyncCommand {
     pub(crate) locked: bool,
     pub(crate) frozen: bool,
     pub(crate) allow_high_sensitivity: bool,
+    pub(crate) strict: bool,
     pub(crate) force: bool,
     pub(crate) adapter: Vec<Adapter>,
     pub(crate) sync_on_launch: bool,
@@ -170,6 +171,7 @@ pub(crate) fn handle_sync(
         locked,
         frozen,
         allow_high_sensitivity,
+        strict,
         force,
         adapter,
         sync_on_launch,
@@ -183,9 +185,56 @@ pub(crate) fn handle_sync(
     };
     let summary = if frozen {
         if dry_run {
-            crate::resolver::sync_in_dir_with_adapters_frozen_dry_run(
+            if strict {
+                crate::resolver::sync_in_dir_with_adapters_frozen_strict_dry_run(
+                    context.cwd,
+                    context.cache_root,
+                    allow_high_sensitivity,
+                    force,
+                    &adapter,
+                    sync_on_launch,
+                    context.reporter,
+                )?
+            } else {
+                crate::resolver::sync_in_dir_with_adapters_frozen_dry_run(
+                    context.cwd,
+                    context.cache_root,
+                    allow_high_sensitivity,
+                    force,
+                    &adapter,
+                    sync_on_launch,
+                    context.reporter,
+                )?
+            }
+        } else {
+            if strict {
+                crate::resolver::sync_in_dir_with_adapters_frozen_strict(
+                    context.cwd,
+                    context.cache_root,
+                    allow_high_sensitivity,
+                    force,
+                    &adapter,
+                    sync_on_launch,
+                    context.reporter,
+                )?
+            } else {
+                crate::resolver::sync_in_dir_with_adapters_frozen(
+                    context.cwd,
+                    context.cache_root,
+                    allow_high_sensitivity,
+                    force,
+                    &adapter,
+                    sync_on_launch,
+                    context.reporter,
+                )?
+            }
+        }
+    } else if dry_run {
+        if strict {
+            crate::resolver::sync_in_dir_with_adapters_strict_dry_run(
                 context.cwd,
                 context.cache_root,
+                locked,
                 allow_high_sensitivity,
                 force,
                 &adapter,
@@ -193,9 +242,10 @@ pub(crate) fn handle_sync(
                 context.reporter,
             )?
         } else {
-            crate::resolver::sync_in_dir_with_adapters_frozen(
+            crate::resolver::sync_in_dir_with_adapters_dry_run(
                 context.cwd,
                 context.cache_root,
+                locked,
                 allow_high_sensitivity,
                 force,
                 &adapter,
@@ -203,28 +253,30 @@ pub(crate) fn handle_sync(
                 context.reporter,
             )?
         }
-    } else if dry_run {
-        crate::resolver::sync_in_dir_with_adapters_dry_run(
-            context.cwd,
-            context.cache_root,
-            locked,
-            allow_high_sensitivity,
-            force,
-            &adapter,
-            sync_on_launch,
-            context.reporter,
-        )?
     } else {
-        crate::resolver::sync_in_dir_with_adapters(
-            context.cwd,
-            context.cache_root,
-            locked,
-            allow_high_sensitivity,
-            force,
-            &adapter,
-            sync_on_launch,
-            context.reporter,
-        )?
+        if strict {
+            crate::resolver::sync_in_dir_with_adapters_strict(
+                context.cwd,
+                context.cache_root,
+                locked,
+                allow_high_sensitivity,
+                force,
+                &adapter,
+                sync_on_launch,
+                context.reporter,
+            )?
+        } else {
+            crate::resolver::sync_in_dir_with_adapters(
+                context.cwd,
+                context.cache_root,
+                locked,
+                allow_high_sensitivity,
+                force,
+                &adapter,
+                sync_on_launch,
+                context.reporter,
+            )?
+        }
     };
     context.reporter.finish(format!(
         "{}{} packages, adapters [{}], {} managed files",

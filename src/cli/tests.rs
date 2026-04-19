@@ -897,6 +897,7 @@ fn sync_help_describes_force() {
     assert!(help.contains("--force"));
     assert!(help.contains("Overwrite unmanaged files"));
     assert!(help.contains("--no-sync-on-launch"));
+    assert!(help.contains("--strict"));
     assert!(help.contains("nodus sync --locked"));
     assert!(help.contains("Use `--locked` when the lockfile must stay unchanged"));
 }
@@ -914,6 +915,7 @@ fn sync_help_explains_when_to_use_sync_and_what_to_run_next() {
         help.contains("Use this when you want to rebuild from what this repo already declares")
     );
     assert!(help.contains("Plain `nodus sync` persists startup sync hooks by default"));
+    assert!(help.contains("reuses the last locked cached revision"));
     assert!(help.contains("Run `nodus doctor` next"));
     assert!(help.contains("Common options"));
 }
@@ -1434,10 +1436,26 @@ fn parses_sync_frozen_flag() {
     let cli = Cli::try_parse_from(["nodus", "sync", "--frozen"]).unwrap();
 
     match cli.command {
-        Command::Sync { frozen, locked, .. } => {
+        Command::Sync {
+            frozen,
+            locked,
+            strict,
+            ..
+        } => {
             assert!(frozen);
             assert!(!locked);
+            assert!(!strict);
         }
+        other => panic!("expected sync command, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_sync_strict_flag() {
+    let cli = Cli::try_parse_from(["nodus", "sync", "--strict"]).unwrap();
+
+    match cli.command {
+        Command::Sync { strict, .. } => assert!(strict),
         other => panic!("expected sync command, got {other:?}"),
     }
 }
@@ -2138,6 +2156,7 @@ justification = "Run checks."
             locked: false,
             frozen: false,
             allow_high_sensitivity: true,
+            strict: false,
             force: false,
             adapter: vec![],
             sync_on_launch: false,
@@ -2165,6 +2184,7 @@ fn sync_dry_run_previews_without_writing_project_files() {
             locked: false,
             frozen: false,
             allow_high_sensitivity: false,
+            strict: false,
             force: false,
             adapter: vec![Adapter::Codex],
             sync_on_launch: true,
@@ -2595,6 +2615,7 @@ fn sync_recreates_cache_after_clean_command() {
             locked: false,
             frozen: false,
             allow_high_sensitivity: false,
+            strict: false,
             force: false,
             adapter: vec![],
             sync_on_launch: false,
@@ -2871,6 +2892,7 @@ fn sync_dry_run_locked_and_frozen_modes_leave_state_unchanged() {
             locked: true,
             frozen: false,
             allow_high_sensitivity: false,
+            strict: false,
             force: false,
             adapter: vec![],
             sync_on_launch: false,
@@ -2885,6 +2907,7 @@ fn sync_dry_run_locked_and_frozen_modes_leave_state_unchanged() {
             locked: false,
             frozen: true,
             allow_high_sensitivity: false,
+            strict: false,
             force: false,
             adapter: vec![],
             sync_on_launch: false,
@@ -3317,6 +3340,7 @@ local_playbook = { path = "vendor/playbook", components = ["skills"] }
             locked: false,
             frozen: false,
             allow_high_sensitivity: false,
+            strict: false,
             force: false,
             adapter: vec![Adapter::Codex],
             sync_on_launch: false,

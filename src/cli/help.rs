@@ -185,6 +185,8 @@ Use this when you want to rebuild from what this repo already declares.
 
 Plain `nodus sync` persists startup sync hooks by default. Pass `--no-sync-on-launch` when you want to rebuild outputs without changing launch hook configuration.
 
+Plain `nodus sync` also reuses the last locked cached revision when a Git dependency cannot be refreshed. Pass `--strict` when that situation should fail the sync instead.
+
 Use `nodus sync` after manifest changes, after editing package content locally, or when you want to rebuild outputs without upgrading dependencies.
 
 Run `nodus doctor` next to verify the repo stays healthy."#;
@@ -196,6 +198,7 @@ pub(super) const SYNC_AFTER_LONG_HELP: &str = r#"Common options:
   nodus sync --no-sync-on-launch
   nodus sync --locked
   nodus sync --frozen
+  nodus sync --strict
   nodus sync --force
 
 Examples:
@@ -203,9 +206,10 @@ Examples:
   nodus sync --no-sync-on-launch
   nodus sync --locked
   nodus sync --frozen
+  nodus sync --strict
   nodus sync --force
 
-Use `--locked` when the lockfile must stay unchanged. Use `--frozen` when installs must come exactly from the existing `nodus.lock`."#;
+Use `--locked` when the lockfile must stay unchanged. Use `--frozen` when installs must come exactly from the existing `nodus.lock`. Use `--strict` when any Git refresh failure should stop the sync instead of falling back to cached locked data."#;
 
 pub(super) const CLEAN_ABOUT: &str = "Clear shared repository, checkout, and snapshot cache data";
 

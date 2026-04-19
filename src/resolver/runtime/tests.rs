@@ -415,7 +415,16 @@ impl Write for SharedBuffer {
 
 fn resolve_project(root: &Path, cache_root: &Path, mode: ResolveMode) -> Result<Resolution> {
     let reporter = Reporter::silent();
-    super::resolve_project(root, cache_root, mode, &reporter, None, None)
+    super::resolve_project(
+        root,
+        cache_root,
+        mode,
+        &reporter,
+        None,
+        None,
+        None,
+        DependencyFailureMode::Graceful,
+    )
 }
 
 fn sync_in_dir(
@@ -446,6 +455,25 @@ fn sync_in_dir_frozen(
     super::sync_in_dir_with_adapters_frozen(
         cwd,
         cache_root,
+        allow_high_sensitivity,
+        false,
+        &[],
+        false,
+        &reporter,
+    )
+}
+
+fn sync_in_dir_strict(
+    cwd: &Path,
+    cache_root: &Path,
+    locked: bool,
+    allow_high_sensitivity: bool,
+) -> Result<SyncSummary> {
+    let reporter = Reporter::silent();
+    super::sync_in_dir_with_adapters_strict(
+        cwd,
+        cache_root,
+        locked,
         allow_high_sensitivity,
         false,
         &[],
@@ -546,6 +574,7 @@ fn sync_in_dir_with_collision_choice(
         false,
         ExecutionMode::Apply,
         None,
+        DependencyFailureMode::Graceful,
         Some(&mut resolver),
         &reporter,
     )
@@ -5074,6 +5103,127 @@ enabled = ["claude"]
         .to_string();
 
     assert!(error.contains("`--frozen` requires an existing nodus.lock"));
+}
+
+#[test]
+fn sync_warns_and_reuses_locked_cached_revision_when_git_refresh_fails() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    let repo = TempDir::new().unwrap();
+    write_file(
+        &repo.path().join("skills/review/SKILL.md"),
+        "---\nname: Review\ndescription: First revision.\n---\n# Review\nfirst\n",
+    );
+    init_git_repo(repo.path());
+    rename_current_branch(repo.path(), "main");
+
+    write_manifest(
+        temp.path(),
+        &format!(
+            r#"
+[adapters]
+enabled = ["claude"]
+
+[dependencies]
+review_pkg = {{ url = "{}", branch = "main" }}
+"#,
+            toml_path_value(repo.path())
+        ),
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let initial_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    let initial_rev = initial_lockfile
+        .packages
+        .iter()
+        .find(|package| package.alias == "review_pkg")
+        .and_then(|package| package.source.rev.clone())
+        .unwrap();
+    let initial_resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let initial_dependency = initial_resolution
+        .packages
+        .iter()
+        .find(|package| package.alias == "review_pkg")
+        .unwrap();
+    let initial_skill_id = namespaced_skill_id(initial_dependency, "review");
+    let initial_skill_path = temp
+        .path()
+        .join(format!(".claude/skills/{initial_skill_id}/SKILL.md"));
+
+    fs::remove_dir_all(repo.path()).unwrap();
+
+    let buffer = SharedBuffer::default();
+    let reporter = Reporter::sink(ColorMode::Never, buffer.clone());
+    super::sync_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        false,
+        false,
+        false,
+        &[],
+        false,
+        &reporter,
+    )
+    .unwrap();
+
+    let output = buffer.contents();
+    assert!(output.contains("warning: dependency `review_pkg` could not be refreshed"));
+    assert!(output.contains("reusing locked cached revision"));
+
+    let updated_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    let updated_rev = updated_lockfile
+        .packages
+        .iter()
+        .find(|package| package.alias == "review_pkg")
+        .and_then(|package| package.source.rev.clone())
+        .unwrap();
+    assert_eq!(updated_rev, initial_rev);
+    assert_eq!(
+        fs::read_to_string(&initial_skill_path).unwrap(),
+        "---\nname: Review\ndescription: First revision.\n---\n# Review\nfirst\n"
+    );
+}
+
+#[test]
+fn sync_strict_fails_when_git_refresh_fails() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    let repo = TempDir::new().unwrap();
+    write_file(
+        &repo.path().join("skills/review/SKILL.md"),
+        "---\nname: Review\ndescription: First revision.\n---\n# Review\nfirst\n",
+    );
+    init_git_repo(repo.path());
+    rename_current_branch(repo.path(), "main");
+
+    write_manifest(
+        temp.path(),
+        &format!(
+            r#"
+[adapters]
+enabled = ["claude"]
+
+[dependencies]
+review_pkg = {{ url = "{}", branch = "main" }}
+"#,
+            toml_path_value(repo.path())
+        ),
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let initial_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    fs::remove_dir_all(repo.path()).unwrap();
+
+    let error = sync_in_dir_strict(temp.path(), cache.path(), false, false)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("git [\"fetch\""));
+
+    let updated_lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    assert_eq!(updated_lockfile, initial_lockfile);
 }
 
 #[test]

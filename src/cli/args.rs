@@ -333,6 +333,11 @@ pub(super) enum Command {
         allow_high_sensitivity: bool,
         #[arg(
             long,
+            help = "Fail instead of reusing the locked cached revision when a Git dependency cannot be refreshed"
+        )]
+        strict: bool,
+        #[arg(
+            long,
             help = "Overwrite unmanaged files when this sync is about to manage those paths"
         )]
         force: bool,

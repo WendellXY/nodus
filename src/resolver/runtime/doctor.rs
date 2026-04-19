@@ -180,7 +180,16 @@ fn inspect_doctor_state(
         "manifest, lockfile, shared store, and managed outputs",
     )?;
 
-    let resolution = resolve_project(cwd, cache_root, ResolveMode::Doctor, reporter, None, None)?;
+    let resolution = resolve_project(
+        cwd,
+        cache_root,
+        ResolveMode::Doctor,
+        reporter,
+        None,
+        None,
+        None,
+        super::DependencyFailureMode::Strict,
+    )?;
     resolution
         .packages
         .par_iter()

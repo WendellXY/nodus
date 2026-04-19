@@ -119,6 +119,12 @@ enum SyncMode {
     Frozen,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DependencyFailureMode {
+    Graceful,
+    Strict,
+}
+
 impl SyncMode {
     fn checks_lockfile(self) -> bool {
         matches!(self, Self::Locked | Self::Frozen)
@@ -214,6 +220,58 @@ pub fn sync_in_dir_with_adapters(
     sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_with_failure_mode(
+        cwd,
+        cache_root,
+        locked,
+        allow_high_sensitivity,
+        force,
+        adapters,
+        sync_on_launch,
+        ExecutionMode::Apply,
+        DependencyFailureMode::Graceful,
+        reporter,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sync_in_dir_with_adapters_strict(
+    cwd: &Path,
+    cache_root: &Path,
+    locked: bool,
+    allow_high_sensitivity: bool,
+    force: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_with_failure_mode(
+        cwd,
+        cache_root,
+        locked,
+        allow_high_sensitivity,
+        force,
+        adapters,
+        sync_on_launch,
+        ExecutionMode::Apply,
+        DependencyFailureMode::Strict,
+        reporter,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_in_dir_with_adapters_with_failure_mode(
+    cwd: &Path,
+    cache_root: &Path,
+    locked: bool,
+    allow_high_sensitivity: bool,
+    force: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    execution_mode: ExecutionMode,
+    dependency_failure_mode: DependencyFailureMode,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
     let install_paths = InstallPaths::project(cwd);
     sync_in_dir_with_adapters_mode(
         &install_paths,
@@ -227,8 +285,9 @@ pub fn sync_in_dir_with_adapters(
         force,
         adapters,
         sync_on_launch,
-        ExecutionMode::Apply,
+        execution_mode,
         None,
+        dependency_failure_mode,
         reporter,
     )
 }
@@ -242,6 +301,52 @@ pub fn sync_in_dir_with_adapters_frozen(
     sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_frozen_with_failure_mode(
+        cwd,
+        cache_root,
+        allow_high_sensitivity,
+        force,
+        adapters,
+        sync_on_launch,
+        ExecutionMode::Apply,
+        DependencyFailureMode::Graceful,
+        reporter,
+    )
+}
+
+pub fn sync_in_dir_with_adapters_frozen_strict(
+    cwd: &Path,
+    cache_root: &Path,
+    allow_high_sensitivity: bool,
+    force: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_frozen_with_failure_mode(
+        cwd,
+        cache_root,
+        allow_high_sensitivity,
+        force,
+        adapters,
+        sync_on_launch,
+        ExecutionMode::Apply,
+        DependencyFailureMode::Strict,
+        reporter,
+    )
+}
+
+fn sync_in_dir_with_adapters_frozen_with_failure_mode(
+    cwd: &Path,
+    cache_root: &Path,
+    allow_high_sensitivity: bool,
+    force: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    execution_mode: ExecutionMode,
+    dependency_failure_mode: DependencyFailureMode,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
     let install_paths = InstallPaths::project(cwd);
     sync_in_dir_with_adapters_mode(
         &install_paths,
@@ -251,8 +356,9 @@ pub fn sync_in_dir_with_adapters_frozen(
         force,
         adapters,
         sync_on_launch,
-        ExecutionMode::Apply,
+        execution_mode,
         None,
+        dependency_failure_mode,
         reporter,
     )
 }
@@ -268,21 +374,41 @@ pub fn sync_in_dir_with_adapters_dry_run(
     sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
-    let install_paths = InstallPaths::project(cwd);
-    sync_in_dir_with_adapters_mode(
-        &install_paths,
+    sync_in_dir_with_adapters_with_failure_mode(
+        cwd,
         cache_root,
-        if locked {
-            SyncMode::Locked
-        } else {
-            SyncMode::Normal
-        },
+        locked,
         allow_high_sensitivity,
         force,
         adapters,
         sync_on_launch,
         ExecutionMode::DryRun,
-        None,
+        DependencyFailureMode::Graceful,
+        reporter,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sync_in_dir_with_adapters_strict_dry_run(
+    cwd: &Path,
+    cache_root: &Path,
+    locked: bool,
+    allow_high_sensitivity: bool,
+    force: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_with_failure_mode(
+        cwd,
+        cache_root,
+        locked,
+        allow_high_sensitivity,
+        force,
+        adapters,
+        sync_on_launch,
+        ExecutionMode::DryRun,
+        DependencyFailureMode::Strict,
         reporter,
     )
 }
@@ -296,17 +422,37 @@ pub fn sync_in_dir_with_adapters_frozen_dry_run(
     sync_on_launch: bool,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
-    let install_paths = InstallPaths::project(cwd);
-    sync_in_dir_with_adapters_mode(
-        &install_paths,
+    sync_in_dir_with_adapters_frozen_with_failure_mode(
+        cwd,
         cache_root,
-        SyncMode::Frozen,
         allow_high_sensitivity,
         force,
         adapters,
         sync_on_launch,
         ExecutionMode::DryRun,
-        None,
+        DependencyFailureMode::Graceful,
+        reporter,
+    )
+}
+
+pub fn sync_in_dir_with_adapters_frozen_strict_dry_run(
+    cwd: &Path,
+    cache_root: &Path,
+    allow_high_sensitivity: bool,
+    force: bool,
+    adapters: &[Adapter],
+    sync_on_launch: bool,
+    reporter: &Reporter,
+) -> Result<SyncSummary> {
+    sync_in_dir_with_adapters_frozen_with_failure_mode(
+        cwd,
+        cache_root,
+        allow_high_sensitivity,
+        force,
+        adapters,
+        sync_on_launch,
+        ExecutionMode::DryRun,
+        DependencyFailureMode::Strict,
         reporter,
     )
 }
@@ -322,6 +468,7 @@ fn sync_in_dir_with_adapters_mode(
     sync_on_launch: bool,
     execution_mode: ExecutionMode,
     root_override: Option<LoadedManifest>,
+    dependency_failure_mode: DependencyFailureMode,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
     let mut collision_resolver = TtyManagedCollisionResolver;
@@ -335,6 +482,7 @@ fn sync_in_dir_with_adapters_mode(
         sync_on_launch,
         execution_mode,
         root_override,
+        dependency_failure_mode,
         if sync_mode.checks_lockfile() || !should_prompt_for_adapter() {
             None
         } else {
@@ -355,6 +503,7 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
     sync_on_launch: bool,
     execution_mode: ExecutionMode,
     root_override: Option<LoadedManifest>,
+    dependency_failure_mode: DependencyFailureMode,
     mut collision_resolver: Option<&mut dyn ManagedCollisionResolver>,
     reporter: &Reporter,
 ) -> Result<SyncSummary> {
@@ -442,10 +591,12 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
             cache_root,
             ResolveMode::Sync,
             reporter,
+            existing_lockfile.as_ref(),
             existing_lockfile
                 .as_ref()
                 .filter(|_| sync_mode.installs_from_lockfile()),
             Some(&root),
+            dependency_failure_mode,
         )?;
         if !resolution.managed_migrations().is_empty() {
             if sync_mode.checks_lockfile() {
@@ -714,6 +865,7 @@ pub(crate) fn sync_with_loaded_root_at_paths(
         sync_on_launch,
         execution_mode,
         Some(root),
+        DependencyFailureMode::Graceful,
         reporter,
     )
 }
@@ -725,7 +877,16 @@ pub fn resolve_project_for_sync(
     cache_root: &Path,
     reporter: &Reporter,
 ) -> Result<Resolution> {
-    resolve_project(root, cache_root, ResolveMode::Sync, reporter, None, None)
+    resolve_project(
+        root,
+        cache_root,
+        ResolveMode::Sync,
+        reporter,
+        None,
+        None,
+        None,
+        DependencyFailureMode::Graceful,
+    )
 }
 
 pub fn resolve_project_from_existing_lockfile_in_dir(
@@ -746,7 +907,9 @@ pub fn resolve_project_from_existing_lockfile_in_dir(
         ResolveMode::Doctor,
         reporter,
         Some(&lockfile),
+        Some(&lockfile),
         None,
+        DependencyFailureMode::Strict,
     )?;
 
     Ok((resolution, lockfile))
