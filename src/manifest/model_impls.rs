@@ -171,10 +171,10 @@ impl LoadedManifest {
         self.manifest.version.clone()
     }
 
-    pub fn claude_plugin_hook_sources(&self) -> &[ClaudePluginHookSource] {
+    pub fn claude_plugin_hook_compat_sources(&self) -> &[ClaudePluginHookCompatSource] {
         self.claude_plugin
             .as_ref()
-            .map(|plugin| plugin.hooks.as_slice())
+            .map(|plugin| plugin.hook_compat_sources.as_slice())
             .unwrap_or(&[])
     }
 

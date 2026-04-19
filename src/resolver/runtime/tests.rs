@@ -2335,6 +2335,64 @@ path = "vendor/hook-plugin"
 }
 
 #[test]
+fn sync_does_not_emit_claude_plugin_hook_compat_for_non_claude_adapters() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.hook_plugin]
+path = "vendor/hook-plugin"
+"#,
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/.claude-plugin/plugin.json"),
+        r#"{
+  "name": "hook-plugin"
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/hook-plugin/hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/format-code.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/scripts/format-code.sh"),
+        "#!/usr/bin/env bash\nexit 0\n",
+    );
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+
+    assert!(!temp.path().join(".claude").exists());
+    assert!(!temp.path().join(".codex/hooks.json").exists());
+    assert!(
+        !temp
+            .path()
+            .join(".nodus/packages/hook_plugin/claude-plugin")
+            .exists()
+    );
+}
+
+#[test]
 fn add_dependency_accepts_all_claude_marketplace_remote_sources_and_syncs_contents() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

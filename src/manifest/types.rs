@@ -372,7 +372,7 @@ pub(super) struct ClaudePluginExtras {
     pub(super) skills: Vec<PathBuf>,
     pub(super) agents: Vec<PathBuf>,
     pub(super) commands: Vec<ClaudePluginCommandSpec>,
-    pub(super) hooks: Vec<ClaudePluginHookSource>,
+    pub(super) hook_compat_sources: Vec<ClaudePluginHookCompatSource>,
     pub(super) mcp_servers: Vec<ClaudePluginMcpSource>,
 }
 
@@ -381,7 +381,7 @@ impl ClaudePluginExtras {
         self.skills.is_empty()
             && self.agents.is_empty()
             && self.commands.is_empty()
-            && self.hooks.is_empty()
+            && self.hook_compat_sources.is_empty()
             && self.mcp_servers.is_empty()
     }
 
@@ -389,7 +389,7 @@ impl ClaudePluginExtras {
         !self.skills.is_empty()
             || !self.agents.is_empty()
             || !self.commands.is_empty()
-            || !self.hooks.is_empty()
+            || !self.hook_compat_sources.is_empty()
             || !self.mcp_servers.is_empty()
     }
 }
@@ -406,8 +406,12 @@ pub(super) enum ClaudePluginMcpSource {
     Path(PathBuf),
 }
 
+// Claude plugin hook configs are tracked separately from Manifest::hooks because
+// they rely on Claude-specific plugin-root semantics like `CLAUDE_PLUGIN_ROOT`.
+// Nodus imports them as an adapter-specific compatibility surface rather than
+// treating them as portable hook intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ClaudePluginHookSource {
+pub(crate) enum ClaudePluginHookCompatSource {
     Inline(Value),
     Path(PathBuf),
 }

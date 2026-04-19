@@ -519,9 +519,12 @@ pub(crate) fn build_output_plan(
     }
 
     let has_claude_plugin_hooks = selected_adapters.contains(Adapter::Claude)
-        && packages
-            .iter()
-            .any(|(package, _)| !package.manifest.claude_plugin_hook_sources().is_empty());
+        && packages.iter().any(|(package, _)| {
+            !package
+                .manifest
+                .claude_plugin_hook_compat_sources()
+                .is_empty()
+        });
 
     if !root_hooks.is_empty() || has_claude_plugin_hooks {
         for file in hook_files(
@@ -1224,7 +1227,12 @@ fn hook_files(
     let claude_hooks = hooks_for_adapter(hooks, selected_adapters, Adapter::Claude);
     let claude_plugin_packages = packages
         .iter()
-        .filter(|(package, _)| !package.manifest.claude_plugin_hook_sources().is_empty())
+        .filter(|(package, _)| {
+            !package
+                .manifest
+                .claude_plugin_hook_compat_sources()
+                .is_empty()
+        })
         .map(|(package, snapshot_root)| (package, snapshot_root.as_path()))
         .collect::<Vec<_>>();
     if !claude_hooks.is_empty() || !claude_plugin_packages.is_empty() {

@@ -9,9 +9,10 @@ use toml::Table;
 
 use super::types::{
     ClaudeMarketplace, ClaudeMarketplaceMcpServers, ClaudeMarketplaceRemoteSource,
-    ClaudeMarketplaceSource, ClaudePluginCommandSpec, ClaudePluginExtras, ClaudePluginHookSource,
-    ClaudePluginMcpConfig, ClaudePluginMcpSource, ClaudePluginMetadata, CodexMarketplace,
-    CodexMarketplacePlugin, CodexPluginMcpConfig, CodexPluginMetadata, SkillFrontmatter,
+    ClaudeMarketplaceSource, ClaudePluginCommandSpec, ClaudePluginExtras,
+    ClaudePluginHookCompatSource, ClaudePluginMcpConfig, ClaudePluginMcpSource,
+    ClaudePluginMetadata, CodexMarketplace, CodexMarketplacePlugin, CodexPluginMcpConfig,
+    CodexPluginMetadata, SkillFrontmatter,
 };
 use super::*;
 use crate::git::github_slug_from_url;
@@ -577,7 +578,7 @@ pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Resu
         loaded.extra_package_files.push(metadata_path.clone());
     }
 
-    if !extras.hooks.is_empty() {
+    if !extras.hook_compat_sources.is_empty() {
         loaded
             .extra_package_files
             .extend(collect_claude_plugin_runtime_files(&loaded.root, &extras)?);
@@ -648,8 +649,8 @@ fn read_supported_claude_plugin_extras(root: &Path) -> Result<Option<ClaudePlugi
     let default_hooks = PathBuf::from("hooks").join("hooks.json");
     if root.join(&default_hooks).is_file() {
         extras
-            .hooks
-            .push(ClaudePluginHookSource::Path(default_hooks));
+            .hook_compat_sources
+            .push(ClaudePluginHookCompatSource::Path(default_hooks));
     }
 
     Ok((!extras.is_empty()).then_some(extras))
@@ -684,8 +685,8 @@ fn collect_claude_plugin_runtime_files(
     for command in &extras.commands {
         collect_existing_path_files(root, &command.path, &mut files)?;
     }
-    for hook in &extras.hooks {
-        if let ClaudePluginHookSource::Path(path) = hook {
+    for hook in &extras.hook_compat_sources {
+        if let ClaudePluginHookCompatSource::Path(path) = hook {
             collect_existing_path_files(root, path, &mut files)?;
         }
     }
@@ -779,7 +780,12 @@ fn parse_claude_plugin_extras(
             metadata_path,
             warnings,
         )?,
-        hooks: parse_claude_plugin_hooks(root, object.get("hooks"), metadata_path, warnings)?,
+        hook_compat_sources: parse_claude_plugin_hook_compat_sources(
+            root,
+            object.get("hooks"),
+            metadata_path,
+            warnings,
+        )?,
         mcp_servers: parse_claude_plugin_mcp_sources(
             root,
             object.get("mcpServers"),
@@ -963,24 +969,24 @@ fn parse_claude_plugin_command_path(
     Ok(Some(ClaudePluginCommandSpec { id, path }))
 }
 
-fn parse_claude_plugin_hooks(
+fn parse_claude_plugin_hook_compat_sources(
     root: &Path,
     value: Option<&Value>,
     metadata_path: &Path,
     warnings: &mut Vec<String>,
-) -> Result<Vec<ClaudePluginHookSource>> {
+) -> Result<Vec<ClaudePluginHookCompatSource>> {
     let Some(value) = value else {
         let default_path = PathBuf::from("hooks").join("hooks.json");
         return Ok(root
             .join(&default_path)
             .is_file()
-            .then_some(ClaudePluginHookSource::Path(default_path))
+            .then_some(ClaudePluginHookCompatSource::Path(default_path))
             .into_iter()
             .collect());
     };
 
     match value {
-        Value::String(path) => Ok(vec![ClaudePluginHookSource::Path(
+        Value::String(path) => Ok(vec![ClaudePluginHookCompatSource::Path(
             normalize_manifest_relative_path(
                 Path::new(path),
                 &format!(
@@ -993,7 +999,7 @@ fn parse_claude_plugin_hooks(
             let mut sources = Vec::new();
             for item in items {
                 match item {
-                    Value::String(path) => sources.push(ClaudePluginHookSource::Path(
+                    Value::String(path) => sources.push(ClaudePluginHookCompatSource::Path(
                         normalize_manifest_relative_path(
                             Path::new(path),
                             &format!(
@@ -1002,7 +1008,9 @@ fn parse_claude_plugin_hooks(
                             ),
                         )?,
                     )),
-                    Value::Object(_) => sources.push(ClaudePluginHookSource::Inline(item.clone())),
+                    Value::Object(_) => {
+                        sources.push(ClaudePluginHookCompatSource::Inline(item.clone()))
+                    }
                     _ => warnings.push(format!(
                         "ignoring unsupported Claude plugin field `hooks` entry in {}: expected an inline object or relative JSON path",
                         metadata_path.display()
@@ -1011,7 +1019,7 @@ fn parse_claude_plugin_hooks(
             }
             Ok(sources)
         }
-        Value::Object(_) => Ok(vec![ClaudePluginHookSource::Inline(value.clone())]),
+        Value::Object(_) => Ok(vec![ClaudePluginHookCompatSource::Inline(value.clone())]),
         _ => {
             warnings.push(format!(
                 "ignoring unsupported Claude plugin field `hooks` in {}: expected an inline object, relative JSON path, or array of those forms",

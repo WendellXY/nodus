@@ -119,10 +119,18 @@ pub fn hook_files(
     let mut warnings = Vec::new();
 
     for (package, snapshot_root) in plugin_packages {
-        if package.manifest.claude_plugin_hook_sources().is_empty() {
+        if package
+            .manifest
+            .claude_plugin_hook_compat_sources()
+            .is_empty()
+        {
             continue;
         }
 
+        // Claude plugin hook configs are adapter-specific compatibility imports.
+        // We materialize a plugin-like root under `.nodus/packages/...` so
+        // `${CLAUDE_PLUGIN_ROOT}` commands keep working without treating these
+        // configs as portable Nodus hooks.
         files.extend(copy_directory(
             plugin_install_root(project_root, package),
             snapshot_root,
@@ -242,10 +250,10 @@ fn plugin_hook_entries(
     let mut files = Vec::new();
     let mut warnings = Vec::new();
 
-    for source in package.manifest.claude_plugin_hook_sources() {
+    for source in package.manifest.claude_plugin_hook_compat_sources() {
         let config = match source {
-            crate::manifest::ClaudePluginHookSource::Inline(config) => config.clone(),
-            crate::manifest::ClaudePluginHookSource::Path(path) => {
+            crate::manifest::ClaudePluginHookCompatSource::Inline(config) => config.clone(),
+            crate::manifest::ClaudePluginHookCompatSource::Path(path) => {
                 serde_json::from_slice(&fs::read(snapshot_root.join(path)).with_context(|| {
                     format!(
                         "failed to read Claude plugin hook config {}",
