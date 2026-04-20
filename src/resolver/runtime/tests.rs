@@ -2714,6 +2714,117 @@ fn add_dependency_accepts_modern_claude_mcp_only_package_and_syncs_mcp_metadata(
 }
 
 #[test]
+fn add_dependency_accepts_manifest_only_hook_package_and_syncs_claude_settings() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    let package = TempDir::new().unwrap();
+    write_file(
+        &package.path().join(MANIFEST_FILE),
+        r#"
+[[hooks]]
+id = "fuli.claude.session-start"
+event = "session_start"
+adapters = ["claude"]
+
+[hooks.matcher]
+sources = ["startup", "resume", "clear", "compact"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook session-start"
+
+[[hooks]]
+id = "fuli.claude.user-prompt-submit"
+event = "user_prompt_submit"
+adapters = ["claude"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook user-prompt-submit"
+
+[[hooks]]
+id = "fuli.claude.post-tool-use"
+event = "post_tool_use"
+adapters = ["claude"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook post-tool-use"
+
+[[hooks]]
+id = "fuli.claude.stop"
+event = "stop"
+adapters = ["claude"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook stop"
+
+[[hooks]]
+id = "fuli.claude.session-end"
+event = "session_end"
+adapters = ["claude"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook session-end"
+"#,
+    );
+    init_git_repo(package.path());
+    rename_current_branch(package.path(), "main");
+
+    add_dependency_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        &package.path().to_string_lossy(),
+        None,
+        &[Adapter::Claude],
+        &[],
+    )
+    .unwrap();
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Claude]).unwrap();
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+
+    let session_start = settings["hooks"]["SessionStart"].as_array().unwrap();
+    assert!(session_start.iter().any(|entry| {
+        entry["matcher"].as_str() == Some("startup|resume|clear|compact")
+            && entry["hooks"].as_array().is_some_and(|hooks| {
+                hooks.iter().any(|hook| {
+                    hook["command"]
+                        .as_str()
+                        .is_some_and(|command| command.contains("./.claude/hooks/nodus-hook-"))
+                })
+            })
+    }));
+    assert!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+            .as_str()
+            .is_some_and(|command| command.contains("./.claude/hooks/nodus-hook-"))
+    );
+    assert!(
+        settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .is_some_and(|command| command.contains("./.claude/hooks/nodus-hook-"))
+    );
+    assert!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .is_some_and(|command| command.contains("./.claude/hooks/nodus-hook-"))
+    );
+    assert!(
+        settings["hooks"]["SessionEnd"][0]["hooks"][0]["command"]
+            .as_str()
+            .is_some_and(|command| command.contains("./.claude/hooks/nodus-hook-"))
+    );
+}
+
+#[test]
 fn add_dependency_overlays_modern_claude_plugin_manifest_mcp_servers_and_syncs_metadata() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
