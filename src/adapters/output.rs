@@ -7,9 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use toml::Value as TomlValue;
 
-use super::{
-    Adapter, Adapters, ArtifactKind, ManagedArtifactNames, ManagedFile, ManagedHookSpec,
-};
+use super::{Adapter, Adapters, ArtifactKind, ManagedArtifactNames, ManagedFile, ManagedHookSpec};
 use crate::lockfile::{Lockfile, managed_mcp_server_name};
 use crate::manifest::{DependencyComponent, HookSpec, McpServerConfig};
 use crate::paths::{display_path, strip_path_prefix};
