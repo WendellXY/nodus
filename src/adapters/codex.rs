@@ -219,15 +219,24 @@ fn matcher_string(hook: &HookSpec) -> Option<String> {
             let sources = if matcher.is_empty() {
                 vec![HookSessionSource::Startup, HookSessionSource::Resume]
             } else {
-                matcher.to_vec()
+                matcher
+                    .iter()
+                    .copied()
+                    .filter(|source| {
+                        matches!(
+                            source,
+                            HookSessionSource::Startup | HookSessionSource::Resume
+                        )
+                    })
+                    .collect::<Vec<_>>()
             };
-            Some(
+            (!sources.is_empty()).then(|| {
                 sources
                     .into_iter()
                     .map(|source| source.as_str())
                     .collect::<Vec<_>>()
-                    .join("|"),
-            )
+                    .join("|")
+            })
         }
         HookEvent::PreToolUse | HookEvent::PostToolUse => {
             let matcher = hook

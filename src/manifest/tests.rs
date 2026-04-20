@@ -470,6 +470,41 @@ command = "./scripts/finish.sh"
 }
 
 #[test]
+fn loads_root_manifest_claude_session_start_sources() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[[hooks]]
+id = "session-memory"
+event = "session_start"
+adapters = ["claude"]
+
+[hooks.matcher]
+sources = ["startup", "clear", "compact"]
+
+[hooks.handler]
+type = "command"
+command = "./scripts/session-memory.sh"
+"#,
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+    let hook = &loaded.manifest.hooks[0];
+
+    assert_eq!(hook.event, HookEvent::SessionStart);
+    assert_eq!(
+        hook.matcher.as_ref().unwrap().sources,
+        vec![
+            HookSessionSource::Startup,
+            HookSessionSource::Clear,
+            HookSessionSource::Compact,
+        ]
+    );
+}
+
+#[test]
 fn lowers_legacy_launch_hook_into_effective_hooks() {
     let temp = TempDir::new().unwrap();
     write_valid_skill(temp.path());
@@ -2793,6 +2828,38 @@ fn serializes_claude_native_lifecycle_hooks() {
     assert!(encoded.contains("event = \"user_prompt_submit\""));
     assert!(encoded.contains("event = \"session_end\""));
     assert!(!encoded.contains("[hooks.matcher]"));
+}
+
+#[test]
+fn serializes_claude_session_start_sources() {
+    let manifest = Manifest {
+        hooks: vec![HookSpec {
+            id: "session-memory".into(),
+            event: HookEvent::SessionStart,
+            adapters: vec![Adapter::Claude],
+            matcher: Some(HookMatcher {
+                sources: vec![
+                    HookSessionSource::Startup,
+                    HookSessionSource::Clear,
+                    HookSessionSource::Compact,
+                ],
+                tool_names: Vec::new(),
+            }),
+            handler: HookHandler {
+                handler_type: HookHandlerType::Command,
+                command: "./scripts/session-memory.sh".into(),
+                cwd: HookWorkingDirectory::GitRoot,
+            },
+            timeout_sec: None,
+            blocking: false,
+        }],
+        ..Manifest::default()
+    };
+
+    let encoded = serialize_manifest(&manifest).unwrap();
+
+    assert!(encoded.contains("event = \"session_start\""));
+    assert!(encoded.contains("sources = [\"startup\", \"clear\", \"compact\"]"));
 }
 
 #[test]

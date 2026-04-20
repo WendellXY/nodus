@@ -5050,6 +5050,55 @@ command = "./scripts/finish.sh"
 }
 
 #[test]
+fn sync_emits_claude_clear_and_compact_session_start_sources() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[adapters]
+enabled = ["claude", "codex", "opencode"]
+
+[[hooks]]
+id = "session-memory"
+event = "session_start"
+
+[hooks.matcher]
+sources = ["startup", "clear", "compact"]
+
+[hooks.handler]
+type = "command"
+command = "./scripts/session-memory.sh"
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let claude_settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    let codex_hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        claude_settings["hooks"]["SessionStart"][0]["matcher"].as_str(),
+        Some("startup|clear|compact")
+    );
+    assert_eq!(
+        codex_hooks["hooks"]["SessionStart"][0]["matcher"].as_str(),
+        Some("startup")
+    );
+    assert!(
+        temp.path()
+            .join(".opencode/plugins/nodus-hooks.js")
+            .exists()
+    );
+}
+
+#[test]
 fn sync_warns_when_launch_hooks_are_unsupported_for_selected_adapters() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

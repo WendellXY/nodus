@@ -1290,9 +1290,25 @@ fn hooks_for_adapter(
     hooks
         .iter()
         .filter(|hook| hook_targets_adapter(hook, selected_adapters, adapter))
-        .filter(|hook| hook_event_supported_by_adapter(adapter, hook.event))
+        .filter(|hook| hook_supported_by_adapter(hook, adapter))
         .cloned()
         .collect()
+}
+
+fn hook_supported_by_adapter(hook: &HookSpec, adapter: Adapter) -> bool {
+    hook_event_supported_by_adapter(adapter, hook.event)
+        && (!matches!(hook.event, crate::manifest::HookEvent::SessionStart)
+            || hook
+                .matcher
+                .as_ref()
+                .map(|matcher| matcher.sources.is_empty())
+                .unwrap_or(true)
+            || hook.matcher.as_ref().is_some_and(|matcher| {
+                matcher
+                    .sources
+                    .iter()
+                    .any(|source| session_start_source_supported_by_adapter(adapter, *source))
+            }))
 }
 
 fn hook_event_supported_by_adapter(adapter: Adapter, event: crate::manifest::HookEvent) -> bool {
@@ -1305,6 +1321,22 @@ fn hook_event_supported_by_adapter(adapter: Adapter, event: crate::manifest::Hoo
                 | crate::manifest::HookEvent::PostToolUse
                 | crate::manifest::HookEvent::Stop
         ),
+        Adapter::Agents | Adapter::Copilot | Adapter::Cursor => false,
+    }
+}
+
+fn session_start_source_supported_by_adapter(
+    adapter: Adapter,
+    source: crate::manifest::HookSessionSource,
+) -> bool {
+    match adapter {
+        Adapter::Claude => true,
+        Adapter::Codex => matches!(
+            source,
+            crate::manifest::HookSessionSource::Startup
+                | crate::manifest::HookSessionSource::Resume
+        ),
+        Adapter::OpenCode => matches!(source, crate::manifest::HookSessionSource::Startup),
         Adapter::Agents | Adapter::Copilot | Adapter::Cursor => false,
     }
 }

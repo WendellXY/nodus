@@ -117,6 +117,8 @@ pub struct HookMatcher {
 pub enum HookSessionSource {
     Startup,
     Resume,
+    Clear,
+    Compact,
 }
 
 impl HookSessionSource {
@@ -124,6 +126,8 @@ impl HookSessionSource {
         match self {
             Self::Startup => "startup",
             Self::Resume => "resume",
+            Self::Clear => "clear",
+            Self::Compact => "compact",
         }
     }
 }
