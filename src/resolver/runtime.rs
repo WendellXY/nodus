@@ -336,6 +336,7 @@ pub fn sync_in_dir_with_adapters_frozen_strict(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_in_dir_with_adapters_frozen_with_failure_mode(
     cwd: &Path,
     cache_root: &Path,

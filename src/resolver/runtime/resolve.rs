@@ -102,6 +102,7 @@ pub(super) fn validate_git_package(package: &ResolvedPackage, cache_root: &Path)
     validate_shared_checkout(&checkout_path, &mirror_path, url)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn resolve_project(
     root: &Path,
     cache_root: &Path,
