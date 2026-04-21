@@ -1943,6 +1943,39 @@ fn accepts_dependency_repo_with_only_default_claude_plugin_hooks() {
 }
 
 #[test]
+fn accepts_dependency_repo_with_manifest_declared_claude_plugin_hooks() {
+    let temp = TempDir::new().unwrap();
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        "claude_plugin_hooks = [\"hooks/hooks.json\"]\n",
+    );
+    write_file(
+        &temp.path().join("hooks/hooks.json"),
+        "{\n  \"hooks\": {\n    \"Stop\": []\n  }\n}\n",
+    );
+    write_file(
+        &temp.path().join("scripts/notify.sh"),
+        "#!/usr/bin/env bash\n",
+    );
+
+    let loaded = load_dependency_from_dir(temp.path()).unwrap();
+
+    assert!(loaded.discovered.is_empty());
+    assert_eq!(
+        loaded.manifest.claude_plugin_hooks,
+        vec![PathBuf::from("hooks/hooks.json")]
+    );
+    let package_files = loaded.package_files().unwrap();
+    assert!(package_files.contains(&canonicalize_path(&temp.path().join(MANIFEST_FILE)).unwrap()));
+    assert!(
+        package_files.contains(&canonicalize_path(&temp.path().join("hooks/hooks.json")).unwrap())
+    );
+    assert!(
+        package_files.contains(&canonicalize_path(&temp.path().join("scripts/notify.sh")).unwrap())
+    );
+}
+
+#[test]
 fn accepts_marketplace_with_hook_only_claude_plugin_source() {
     let temp = TempDir::new().unwrap();
     write_marketplace(
@@ -2812,6 +2845,18 @@ fn serializes_hooks() {
     assert!(encoded.contains("[hooks.handler]"));
     assert!(encoded.contains("command = \"./scripts/preflight.sh\""));
     assert!(encoded.contains("cwd = \"session\""));
+}
+
+#[test]
+fn serializes_claude_plugin_hooks() {
+    let manifest = Manifest {
+        claude_plugin_hooks: vec![PathBuf::from("hooks/hooks.json")],
+        ..Manifest::default()
+    };
+
+    let encoded = serialize_manifest(&manifest).unwrap();
+
+    assert!(encoded.contains("claude_plugin_hooks = [\"hooks/hooks.json\"]"));
 }
 
 #[test]

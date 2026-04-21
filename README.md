@@ -143,6 +143,12 @@ nodus info <package> --json
 
 That output now includes adapter hook capability data derived from the same rules Nodus uses during sync.
 
+Packages that intentionally ship Claude plugin hook config from a `hooks/`
+folder can declare it explicitly in `nodus.toml` with
+`claude_plugin_hooks = ["hooks/hooks.json"]`. This keeps the behavior
+adapter-specific for Claude and uses the existing `CLAUDE_PLUGIN_ROOT`
+compatibility path instead of portable native `[[hooks]]`.
+
 ## CLI Help
 
 `nodus --help` is the main command guide.

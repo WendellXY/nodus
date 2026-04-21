@@ -546,7 +546,7 @@ fn import_marketplace_mcp_servers(
 pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Result<()> {
     let metadata_path = loaded.root.join(".claude-plugin").join("plugin.json");
     let metadata_exists = metadata_path.exists();
-    let extras = if metadata_exists {
+    let mut extras = if metadata_exists {
         let (descriptor, version) = read_claude_plugin_descriptor(&metadata_path)?;
         let extras = parse_claude_plugin_extras(
             &loaded.root,
@@ -568,6 +568,14 @@ pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Resu
     } else {
         read_supported_claude_plugin_extras(&loaded.root)?.unwrap_or_default()
     };
+    extras.hook_compat_sources.extend(
+        loaded
+            .manifest
+            .normalized_claude_plugin_hooks()?
+            .into_iter()
+            .map(ClaudePluginHookCompatSource::Path),
+    );
+    dedupe_claude_plugin_hook_compat_sources(&mut extras.hook_compat_sources);
     if !metadata_exists && extras.is_empty() {
         return Ok(());
     }
@@ -629,6 +637,16 @@ pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Resu
     loaded.extra_package_files.sort();
     loaded.extra_package_files.dedup();
     Ok(())
+}
+
+fn dedupe_claude_plugin_hook_compat_sources(sources: &mut Vec<ClaudePluginHookCompatSource>) {
+    let mut deduped = Vec::with_capacity(sources.len());
+    for source in std::mem::take(sources) {
+        if !deduped.contains(&source) {
+            deduped.push(source);
+        }
+    }
+    *sources = deduped;
 }
 
 fn read_supported_claude_plugin_extras(root: &Path) -> Result<Option<ClaudePluginExtras>> {
@@ -1848,6 +1866,7 @@ pub(super) fn collect_ignored_field_warnings(table: &Table) -> Vec<String> {
         "mcp_servers",
         "adapters",
         "hooks",
+        "claude_plugin_hooks",
         "launch_hooks",
         "workspace",
         "dependencies",

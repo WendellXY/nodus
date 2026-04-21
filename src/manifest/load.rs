@@ -309,6 +309,19 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String> {
         }
     }
 
+    let claude_plugin_hooks = manifest.normalized_claude_plugin_hooks()?;
+    if !claude_plugin_hooks.is_empty() {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        let encoded = claude_plugin_hooks
+            .iter()
+            .map(|path| quote(&display_path(path)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!("claude_plugin_hooks = [{encoded}]\n"));
+    }
+
     if let Some(workspace) = &manifest.workspace {
         if !output.is_empty() && !output.ends_with('\n') {
             output.push('\n');

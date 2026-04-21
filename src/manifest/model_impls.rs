@@ -450,6 +450,22 @@ impl Manifest {
         Ok(normalized_roots)
     }
 
+    pub fn normalized_claude_plugin_hooks(&self) -> Result<Vec<PathBuf>> {
+        let mut normalized_paths = Vec::with_capacity(self.claude_plugin_hooks.len());
+        let mut seen = HashSet::new();
+        for path in &self.claude_plugin_hooks {
+            let normalized = normalize_manifest_relative_path(
+                path,
+                "manifest field `claude_plugin_hooks` entry",
+            )?;
+            if !seen.insert(normalized.clone()) {
+                bail!("manifest field `claude_plugin_hooks` must not contain duplicate paths");
+            }
+            normalized_paths.push(normalized);
+        }
+        Ok(normalized_paths)
+    }
+
     pub fn set_enabled_adapters(&mut self, adapters: &[Adapter]) {
         self.adapters = Some(AdapterConfig::normalized(adapters));
     }

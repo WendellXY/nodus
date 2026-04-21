@@ -2362,6 +2362,76 @@ path = "vendor/hook-plugin"
 }
 
 #[test]
+fn sync_emits_claude_plugin_command_hooks_from_manifest_declared_hook_sources() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies.hook_plugin]
+path = "vendor/hook-plugin"
+"#,
+    );
+    write_manifest(
+        &temp.path().join("vendor/hook-plugin"),
+        r#"
+claude_plugin_hooks = ["hooks/hooks.json"]
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/hook-plugin/hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/format-code.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/scripts/format-code.sh"),
+        "#!/usr/bin/env bash\nexit 0\n",
+    );
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Claude]).unwrap();
+
+    let settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        settings["hooks"]["PostToolUse"][0]["matcher"].as_str(),
+        Some("Write|Edit")
+    );
+    let command = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(command.contains("./.claude/hooks/nodus-plugin-hook-"));
+    assert!(
+        temp.path()
+            .join(".nodus/packages/hook_plugin/claude-plugin/hooks/hooks.json")
+            .exists()
+    );
+    assert!(
+        temp.path()
+            .join(".nodus/packages/hook_plugin/claude-plugin/scripts/format-code.sh")
+            .exists()
+    );
+}
+
+#[test]
 fn sync_does_not_emit_claude_plugin_hook_compat_for_non_claude_adapters() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
