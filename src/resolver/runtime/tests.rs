@@ -4198,6 +4198,46 @@ target = ".claude/.gitignore"
 }
 
 #[test]
+fn sync_merges_existing_unmanaged_runtime_root_gitignore() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+    write_file(
+        &temp.path().join(".codex/.gitignore"),
+        ".gitignore\n# custom\nskills/*_legacy/\n",
+    );
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+
+    let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let dependency = resolution
+        .packages
+        .iter()
+        .find(|package| package.alias == "shared")
+        .unwrap();
+    let managed_skill_id = namespaced_skill_id(dependency, "review");
+    let gitignore = fs::read_to_string(temp.path().join(".codex/.gitignore")).unwrap();
+    let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+
+    assert!(gitignore.starts_with("# Managed by nodus\n.gitignore\n"));
+    assert!(gitignore.contains("# custom"));
+    assert!(gitignore.contains("skills/*_legacy/"));
+    assert!(gitignore.contains(&format!("skills/{managed_skill_id}")));
+    assert!(
+        lockfile
+            .managed_files
+            .contains(&String::from(".codex/.gitignore"))
+    );
+}
+
+#[test]
 fn sync_emits_mcp_json_from_dependency_manifests() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

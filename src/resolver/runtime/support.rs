@@ -289,11 +289,16 @@ fn allows_managed_merge(project_root: &Path, path: &Path) -> bool {
 
 pub(super) fn managed_merge_paths(project_root: &Path) -> HashSet<PathBuf> {
     [
+        project_root.join(".agents/.gitignore"),
+        project_root.join(".claude/.gitignore"),
         project_root.join(".claude/settings.json"),
         project_root.join(".claude/settings.local.json"),
+        project_root.join(".codex/.gitignore"),
         project_root.join(".codex/hooks.json"),
         project_root.join(".mcp.json"),
+        project_root.join(".cursor/.gitignore"),
         project_root.join("opencode.json"),
+        project_root.join(".opencode/.gitignore"),
         project_root.join(".codex/config.toml"),
     ]
     .into_iter()

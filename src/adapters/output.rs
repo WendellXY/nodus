@@ -623,6 +623,21 @@ fn gitignore_files(
             .insert(pattern);
     }
 
+    for (root, entry) in &mut entries {
+        if entry.generated_patterns.is_empty() || !entry.explicit_lines.is_empty() {
+            continue;
+        }
+
+        let path = root.join(".gitignore");
+        if !path.is_file() {
+            continue;
+        }
+
+        let contents = fs::read(&path)
+            .with_context(|| format!("failed to read existing {}", path.display()))?;
+        entry.explicit_lines = parse_gitignore_lines(&path, &contents)?;
+    }
+
     let mut plan = RuntimeGitignorePlan::default();
     for (root, entry) in entries {
         if entry.generated_patterns.is_empty() {
@@ -1490,6 +1505,37 @@ mod tests {
 
         assert!(plan.consumed_inputs.is_empty());
         assert!(plan.files.is_empty());
+    }
+
+    #[test]
+    fn gitignore_files_merge_existing_runtime_root_gitignore_from_disk() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let project_root = temp.path();
+        fs::create_dir_all(project_root.join(".codex")).unwrap();
+        fs::write(
+            project_root.join(".codex/.gitignore"),
+            b".gitignore\n# custom\nskills/*_legacy/\n",
+        )
+        .unwrap();
+
+        let mut files = BTreeMap::new();
+        files.insert(
+            project_root.join(".codex/skills/review_abc123/SKILL.md"),
+            b"# Review\n".to_vec(),
+        );
+
+        let plan = gitignore_files(project_root, &files).unwrap();
+
+        assert_eq!(
+            plan.consumed_inputs,
+            vec![project_root.join(".codex/.gitignore")]
+        );
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].path, project_root.join(".codex/.gitignore"));
+        assert_eq!(
+            String::from_utf8(plan.files[0].contents.clone()).unwrap(),
+            "# Managed by nodus\n.gitignore\n# custom\nskills/*_legacy/\nskills/*_abc123/\n"
+        );
     }
 
     #[test]
