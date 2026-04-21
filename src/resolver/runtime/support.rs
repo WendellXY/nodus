@@ -342,6 +342,25 @@ pub(super) fn find_managed_collision(
     None
 }
 
+pub(super) fn find_runtime_output_collision(
+    planned_files: &[ManagedFile],
+    collision: &UnmanagedCollision,
+) -> Option<ManagedCollision> {
+    planned_files
+        .iter()
+        .find(|file| {
+            collision.path == file.path
+                || collision.path.starts_with(&file.path)
+                || file.path.starts_with(&collision.path)
+        })
+        .map(|_| ManagedCollision {
+            alias: String::new(),
+            ownership_root: collision.path.clone(),
+            collision_path: collision.path.clone(),
+            source: ManagedCollisionSource::RuntimeOutput,
+        })
+}
+
 pub(super) fn unmanaged_collision_guidance(
     project_root: &Path,
     collision: &ManagedCollision,
@@ -360,6 +379,12 @@ pub(super) fn unmanaged_collision_guidance(
             display_path(&collision.collision_path),
             display_path(&project_root.join(&collision.ownership_root)),
             collision.alias,
+            sync_mode.flag(),
+        ),
+        ManagedCollisionSource::RuntimeOutput => format!(
+            "refusing to overwrite unmanaged file {}. Managed runtime output {} collides with an existing path. Rerun plain `nodus sync` on a TTY to choose whether to adopt that output or cancel; {} cannot prompt interactively",
+            display_path(&collision.collision_path),
+            display_path(&collision.collision_path),
             sync_mode.flag(),
         ),
     }
@@ -385,17 +410,31 @@ fn prompt_for_managed_collision(
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> Result<ManagedCollisionChoice> {
-    writeln!(
-        output,
-        "{} {} from dependency `{}` collides with existing unmanaged path {}.",
-        match collision.source {
-            ManagedCollisionSource::LegacyDependencyMapping => "Managed target",
-            ManagedCollisionSource::PackageManagedExport => "Package-owned managed export",
-        },
-        display_path(&project_root.join(&collision.ownership_root)),
-        collision.alias,
-        display_path(&collision.collision_path)
-    )?;
+    match collision.source {
+        ManagedCollisionSource::LegacyDependencyMapping
+        | ManagedCollisionSource::PackageManagedExport => {
+            writeln!(
+                output,
+                "{} {} from dependency `{}` collides with existing unmanaged path {}.",
+                match collision.source {
+                    ManagedCollisionSource::LegacyDependencyMapping => "Managed target",
+                    ManagedCollisionSource::PackageManagedExport => "Package-owned managed export",
+                    ManagedCollisionSource::RuntimeOutput => unreachable!(),
+                },
+                display_path(&project_root.join(&collision.ownership_root)),
+                collision.alias,
+                display_path(&collision.collision_path)
+            )?;
+        }
+        ManagedCollisionSource::RuntimeOutput => {
+            writeln!(
+                output,
+                "Managed runtime output {} collides with existing unmanaged path {}.",
+                display_path(&collision.collision_path),
+                display_path(&collision.collision_path)
+            )?;
+        }
+    }
     writeln!(output, "Choose how to continue:")?;
     writeln!(
         output,
@@ -430,9 +469,10 @@ fn parse_managed_collision_choice(
         (ManagedCollisionSource::LegacyDependencyMapping, "3" | "cancel") => {
             Ok(ManagedCollisionChoice::Cancel)
         }
-        (ManagedCollisionSource::PackageManagedExport, "2" | "cancel") => {
-            Ok(ManagedCollisionChoice::Cancel)
-        }
+        (
+            ManagedCollisionSource::PackageManagedExport | ManagedCollisionSource::RuntimeOutput,
+            "2" | "cancel",
+        ) => Ok(ManagedCollisionChoice::Cancel),
         (_, other) => bail!("invalid collision resolution `{other}`"),
     }
 }

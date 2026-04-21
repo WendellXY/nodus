@@ -12,8 +12,9 @@ pub use self::doctor::{
 use self::resolve::{ResolveProjectOptions, resolve_project};
 use self::support::{
     build_sync_execution_plan, enforce_capabilities, execute_sync_plan, find_managed_collision,
-    find_unmanaged_collision, load_owned_paths, recover_runtime_owned_paths,
-    recover_runtime_owned_paths_from_disk, unmanaged_collision_guidance,
+    find_runtime_output_collision, find_unmanaged_collision, load_owned_paths,
+    recover_runtime_owned_paths, recover_runtime_owned_paths_from_disk,
+    unmanaged_collision_guidance,
 };
 #[cfg(test)]
 use self::support::{prune_empty_parent_dirs, write_managed_files};
@@ -220,6 +221,7 @@ struct ManagedCollision {
 enum ManagedCollisionSource {
     LegacyDependencyMapping,
     PackageManagedExport,
+    RuntimeOutput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -769,7 +771,8 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
                 &install_paths.runtime_root,
                 &resolution,
                 &unmanaged_collision,
-            ) else {
+            )
+            .or_else(|| find_runtime_output_collision(&planned_files, &unmanaged_collision)) else {
                 bail!(
                     "refusing to overwrite unmanaged file {}",
                     display_path(&unmanaged_collision.path)
@@ -787,14 +790,26 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
             };
             match resolver.resolve(&install_paths.runtime_root, &managed_collision)? {
                 ManagedCollisionChoice::Adopt => {
-                    let ownership_root = install_paths
-                        .runtime_root
-                        .join(&managed_collision.ownership_root);
-                    reporter.note(format!(
-                        "adopting managed target {}",
-                        display_path(&ownership_root)
-                    ))?;
-                    adopted_owned_paths.insert(ownership_root);
+                    let adopted_path = match managed_collision.source {
+                        ManagedCollisionSource::RuntimeOutput => {
+                            reporter.note(format!(
+                                "adopting managed runtime output {}",
+                                display_path(&managed_collision.collision_path)
+                            ))?;
+                            managed_collision.collision_path.clone()
+                        }
+                        _ => {
+                            let ownership_root = install_paths
+                                .runtime_root
+                                .join(&managed_collision.ownership_root);
+                            reporter.note(format!(
+                                "adopting managed target {}",
+                                display_path(&ownership_root)
+                            ))?;
+                            ownership_root
+                        }
+                    };
+                    adopted_owned_paths.insert(adopted_path);
                     continue;
                 }
                 ManagedCollisionChoice::RemoveMapping => {
@@ -823,14 +838,18 @@ fn sync_in_dir_with_adapters_mode_and_collision_resolution(
                     continue;
                 }
                 ManagedCollisionChoice::Cancel => {
+                    let target = match managed_collision.source {
+                        ManagedCollisionSource::RuntimeOutput => {
+                            managed_collision.collision_path.clone()
+                        }
+                        _ => install_paths
+                            .runtime_root
+                            .join(&managed_collision.ownership_root),
+                    };
                     bail!(
                         "cancelled {} because managed target {} collides with existing unmanaged path {}",
                         sync_mode.flag(),
-                        display_path(
-                            &install_paths
-                                .runtime_root
-                                .join(&managed_collision.ownership_root),
-                        ),
+                        display_path(&target),
                         display_path(&managed_collision.collision_path)
                     );
                 }

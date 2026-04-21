@@ -3602,7 +3602,13 @@ shared = { path = "vendor/shared" }
     let managed_skill_id = namespaced_skill_id(dependency, "checks");
     let managed_agent_file = namespaced_file_name(dependency, "shared", "md");
     let managed_copilot_agent_file = namespaced_file_name(dependency, "shared", "agent.md");
-    let managed_command_file = namespaced_file_name(dependency, "build", "md");
+    let managed_command_file = resolution_file_name(
+        &resolution,
+        dependency,
+        ArtifactKind::Command,
+        "build",
+        "md",
+    );
     let managed_claude_rule_file = namespaced_file_name(dependency, "default", "md");
     let managed_cursor_rule_file = namespaced_file_name(dependency, "default", "mdc");
 
@@ -3824,7 +3830,13 @@ shared = { path = "vendor/shared", components = ["skills"] }
         .unwrap();
     let managed_skill_id = namespaced_skill_id(dependency, "review");
     let managed_agent_file = namespaced_file_name(dependency, "shared", "md");
-    let managed_command_file = namespaced_file_name(dependency, "build", "md");
+    let managed_command_file = resolution_file_name(
+        &resolution,
+        dependency,
+        ArtifactKind::Command,
+        "build",
+        "md",
+    );
     let managed_claude_rule_file = namespaced_file_name(dependency, "default", "md");
 
     assert_eq!(
@@ -4162,6 +4174,109 @@ shared = { path = "vendor/shared" }
             .managed_files
             .iter()
             .any(|path| path == ".codex/skills")
+    );
+}
+
+#[test]
+fn sync_can_adopt_unmanaged_runtime_command_output() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &Adapter::ALL).unwrap();
+
+    write_file(
+        &temp.path().join("vendor/shared/commands/build.txt"),
+        "cargo test\n",
+    );
+
+    let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let dependency = resolution
+        .packages
+        .iter()
+        .find(|package| package.alias == "shared")
+        .unwrap();
+    let managed_command_file = namespaced_file_name(dependency, "build", "md");
+    write_file(
+        &temp
+            .path()
+            .join(format!(".claude/commands/{managed_command_file}")),
+        "user-owned command\n",
+    );
+
+    sync_in_dir_with_collision_choice(temp.path(), cache.path(), ManagedCollisionChoice::Adopt)
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(
+            temp.path()
+                .join(format!(".claude/commands/{managed_command_file}"))
+        )
+        .unwrap(),
+        "cargo test\n"
+    );
+    let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
+    let managed_paths = lockfile.managed_paths(temp.path()).unwrap();
+    assert!(
+        managed_paths.contains(
+            &temp
+                .path()
+                .join(format!(".claude/commands/{managed_command_file}"))
+        )
+    );
+}
+
+#[test]
+fn sync_can_cancel_unmanaged_runtime_command_output_collision() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared" }
+"#,
+    );
+    write_skill(&temp.path().join("vendor/shared/skills/review"), "Review");
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &Adapter::ALL).unwrap();
+
+    write_file(
+        &temp.path().join("vendor/shared/commands/build.txt"),
+        "cargo test\n",
+    );
+
+    let resolution = resolve_project(temp.path(), cache.path(), ResolveMode::Sync).unwrap();
+    let dependency = resolution
+        .packages
+        .iter()
+        .find(|package| package.alias == "shared")
+        .unwrap();
+    let managed_command_file = namespaced_file_name(dependency, "build", "md");
+    let managed_command_path = temp
+        .path()
+        .join(format!(".claude/commands/{managed_command_file}"));
+    write_file(&managed_command_path, "user-owned command\n");
+
+    let error = sync_in_dir_with_collision_choice(
+        temp.path(),
+        cache.path(),
+        ManagedCollisionChoice::Cancel,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cancelled `nodus sync`"));
+    assert_eq!(
+        fs::read_to_string(&managed_command_path).unwrap(),
+        "user-owned command\n"
     );
 }
 
