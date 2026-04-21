@@ -122,6 +122,27 @@ If you want a user-level install instead of repo-scoped state, use `--global` ex
 nodus add nodus-rs/nodus --global --adapter codex
 ```
 
+## Hook Support Matrix
+
+When a package publishes `[[hooks]]`, Nodus filters those hook intents by what each adapter can actually emit today.
+
+| Adapter | Native hook events | `session_start` sources |
+|---------|--------------------|-------------------------|
+| `claude` | `session_start`, `user_prompt_submit`, `pre_tool_use`, `post_tool_use`, `stop`, `session_end` | `startup`, `resume`, `clear`, `compact` |
+| `codex` | `session_start`, `pre_tool_use`, `post_tool_use`, `stop` | `startup`, `resume` |
+| `opencode` | `session_start`, `pre_tool_use`, `post_tool_use`, `stop` | `startup` |
+| `agents` | none | none |
+| `copilot` | none | none |
+| `cursor` | none | none |
+
+If you want to inspect the exact matrix for one package, run:
+
+```bash
+nodus info <package> --json
+```
+
+That output now includes adapter hook capability data derived from the same rules Nodus uses during sync.
+
 ## CLI Help
 
 `nodus --help` is the main command guide.

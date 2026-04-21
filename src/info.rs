@@ -6,7 +6,7 @@ use anstyle::{AnsiColor, Effects, Style};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::Adapter;
+use crate::adapters::{Adapter, effective_session_start_sources, hook_supported_by_adapter};
 use crate::domain::dependency_query::{
     ResolvedInspectionSource, load_manifest_for_inspection, resolve_inspection_target,
 };
@@ -48,6 +48,7 @@ pub struct PackageInfo {
     dependencies: Vec<String>,
     dev_dependencies: Vec<String>,
     capabilities: Vec<PackageCapability>,
+    hook_adapter_support: Vec<PackageHookAdapterSupport>,
     warnings: Vec<String>,
     #[serde(skip)]
     show_dev_dependencies: bool,
@@ -88,6 +89,18 @@ struct PackageManagedExport {
 struct PackageWorkspaceMember {
     id: String,
     enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PackageHookAdapterSupport {
+    adapter: Adapter,
+    supported_events: Vec<PackageHookEventSupport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PackageHookEventSupport {
+    event: String,
+    session_start_sources: Vec<String>,
 }
 
 struct PackageInfoContext {
@@ -370,6 +383,11 @@ fn package_info_from_loaded(
         })
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
+    let hooks = if role == PackageRole::Root {
+        manifest.manifest.effective_hooks()
+    } else {
+        manifest.manifest.hooks.clone()
+    };
 
     PackageInfo {
         alias,
@@ -463,6 +481,7 @@ fn package_info_from_loaded(
                 justification: capability.justification.clone(),
             })
             .collect(),
+        hook_adapter_support: build_hook_adapter_support(&hooks),
         warnings,
         show_dev_dependencies: role == PackageRole::Root,
     }
@@ -601,6 +620,14 @@ impl PackageInfo {
         if !self.capabilities.is_empty() {
             lines.push(paint_label(reporter, "capabilities:"));
             lines.extend(render_capability_lines(reporter, &self.capabilities));
+        }
+
+        if !self.hook_adapter_support.is_empty() {
+            lines.push(paint_label(reporter, "hook-adapter-support:"));
+            lines.extend(render_hook_adapter_support_lines(
+                reporter,
+                &self.hook_adapter_support,
+            ));
         }
 
         if !self.managed_exports.is_empty() {
@@ -769,6 +796,72 @@ fn render_capability_lines(reporter: &Reporter, capabilities: &[PackageCapabilit
                 "  {id} = {sensitivity}{justification}",
                 sensitivity = capability.sensitivity,
             )
+        })
+        .collect()
+}
+
+fn build_hook_adapter_support(
+    hooks: &[crate::manifest::HookSpec],
+) -> Vec<PackageHookAdapterSupport> {
+    if hooks.is_empty() {
+        return Vec::new();
+    }
+
+    Adapter::ALL
+        .into_iter()
+        .map(|adapter| PackageHookAdapterSupport {
+            adapter,
+            supported_events: hooks
+                .iter()
+                .filter(|hook| hook_supported_by_adapter(hook, adapter))
+                .map(|hook| PackageHookEventSupport {
+                    event: hook.event.as_str().to_string(),
+                    session_start_sources: effective_session_start_sources(hook, adapter)
+                        .into_iter()
+                        .map(|source| source.as_str().to_string())
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn render_hook_adapter_support_lines(
+    reporter: &Reporter,
+    support: &[PackageHookAdapterSupport],
+) -> Vec<String> {
+    let width = support
+        .iter()
+        .map(|entry| entry.adapter.as_str().len())
+        .max()
+        .unwrap_or(0);
+
+    support
+        .iter()
+        .map(|entry| {
+            let padded = format!("{:width$}", entry.adapter.as_str(), width = width);
+            let label = if reporter.color_enabled() {
+                reporter.paint(&padded, dim_style())
+            } else {
+                padded
+            };
+            let summary = if entry.supported_events.is_empty() {
+                "none".to_string()
+            } else {
+                entry
+                    .supported_events
+                    .iter()
+                    .map(|event| {
+                        if event.session_start_sources.is_empty() {
+                            event.event.clone()
+                        } else {
+                            format!("{}({})", event.event, event.session_start_sources.join(","))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("  {label} = {summary}")
         })
         .collect()
 }
@@ -1082,6 +1175,134 @@ api_version = "1"
         assert!(output.contains("artifacts:\n  skills = [review]"));
         assert!(output.contains("features:\n +default"));
         assert!(output.contains("  test-utils = []"));
+    }
+
+    #[test]
+    fn info_reports_hook_adapter_support_matrix() {
+        let package = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+
+        write_file(
+            &package.path().join("nodus.toml"),
+            r#"
+name = "fuli"
+
+[[hooks]]
+id = "fuli.claude.session-start"
+event = "session_start"
+
+[hooks.matcher]
+sources = ["startup", "resume", "clear", "compact"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook session-start"
+
+[[hooks]]
+id = "fuli.claude.user-prompt-submit"
+event = "user_prompt_submit"
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook user-prompt-submit"
+
+[[hooks]]
+id = "fuli.claude.post-tool-use"
+event = "post_tool_use"
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook post-tool-use"
+
+[[hooks]]
+id = "fuli.claude.stop"
+event = "stop"
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook stop"
+
+[[hooks]]
+id = "fuli.claude.session-end"
+event = "session_end"
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook session-end"
+"#,
+        );
+        write_skill(package.path(), "Fuli Memory");
+
+        let info = describe_package_json_in_dir(
+            package.path(),
+            cache.path(),
+            package.path().to_str().unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let claude = info
+            .hook_adapter_support
+            .iter()
+            .find(|entry| entry.adapter == Adapter::Claude)
+            .unwrap();
+        assert_eq!(claude.supported_events.len(), 5);
+        assert_eq!(
+            claude.supported_events[0].session_start_sources,
+            vec!["startup", "resume", "clear", "compact"]
+        );
+
+        let codex = info
+            .hook_adapter_support
+            .iter()
+            .find(|entry| entry.adapter == Adapter::Codex)
+            .unwrap();
+        assert_eq!(
+            codex
+                .supported_events
+                .iter()
+                .map(|event| event.event.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session_start", "post_tool_use", "stop"]
+        );
+        assert_eq!(
+            codex.supported_events[0].session_start_sources,
+            vec!["startup", "resume"]
+        );
+
+        let opencode = info
+            .hook_adapter_support
+            .iter()
+            .find(|entry| entry.adapter == Adapter::OpenCode)
+            .unwrap();
+        assert_eq!(
+            opencode
+                .supported_events
+                .iter()
+                .map(|event| event.event.as_str())
+                .collect::<Vec<_>>(),
+            vec!["session_start", "post_tool_use", "stop"]
+        );
+        assert_eq!(
+            opencode.supported_events[0].session_start_sources,
+            vec!["startup"]
+        );
+
+        let output = capture_info_output(
+            package.path(),
+            cache.path(),
+            package.path().to_str().unwrap(),
+            None,
+            None,
+        );
+        assert!(output.contains("hook-adapter-support:"));
+        assert!(output.contains("claude   = session_start(startup,resume,clear,compact)"));
+        assert!(output.contains("user_prompt_submit"));
+        assert!(output.contains("session_end"));
+        assert!(output.contains("codex    = session_start(startup,resume), post_tool_use, stop"));
+        assert!(output.contains("opencode = session_start(startup), post_tool_use, stop"));
+        assert!(output.contains("agents   = none"));
     }
 
     #[test]

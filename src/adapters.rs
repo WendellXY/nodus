@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::lockfile::LockedPackage;
-use crate::manifest::{DependencyComponent, HookSpec};
+use crate::manifest::{DependencyComponent, HookEvent, HookSessionSource, HookSpec};
 use crate::resolver::{PackageSource, ResolvedPackage};
 
 mod output;
@@ -30,6 +30,83 @@ pub(crate) struct ManagedHookSpec {
     pub package_alias: String,
     pub emitted_from_root: bool,
     pub hook: HookSpec,
+}
+
+pub(crate) fn hook_event_supported_by_adapter(adapter: Adapter, event: HookEvent) -> bool {
+    match adapter {
+        Adapter::Claude => true,
+        Adapter::Codex | Adapter::OpenCode => matches!(
+            event,
+            HookEvent::SessionStart
+                | HookEvent::PreToolUse
+                | HookEvent::PostToolUse
+                | HookEvent::Stop
+        ),
+        Adapter::Agents | Adapter::Copilot | Adapter::Cursor => false,
+    }
+}
+
+pub(crate) fn session_start_source_supported_by_adapter(
+    adapter: Adapter,
+    source: HookSessionSource,
+) -> bool {
+    match adapter {
+        Adapter::Claude => true,
+        Adapter::Codex => matches!(
+            source,
+            HookSessionSource::Startup | HookSessionSource::Resume
+        ),
+        Adapter::OpenCode => matches!(source, HookSessionSource::Startup),
+        Adapter::Agents | Adapter::Copilot | Adapter::Cursor => false,
+    }
+}
+
+pub(crate) fn hook_supported_by_adapter(hook: &HookSpec, adapter: Adapter) -> bool {
+    hook_event_supported_by_adapter(adapter, hook.event)
+        && (!matches!(hook.event, HookEvent::SessionStart)
+            || hook
+                .matcher
+                .as_ref()
+                .map(|matcher| matcher.sources.is_empty())
+                .unwrap_or(true)
+            || hook.matcher.as_ref().is_some_and(|matcher| {
+                matcher
+                    .sources
+                    .iter()
+                    .any(|source| session_start_source_supported_by_adapter(adapter, *source))
+            }))
+}
+
+pub(crate) fn effective_session_start_sources(
+    hook: &HookSpec,
+    adapter: Adapter,
+) -> Vec<HookSessionSource> {
+    if !matches!(hook.event, HookEvent::SessionStart) {
+        return Vec::new();
+    }
+
+    let configured = hook
+        .matcher
+        .as_ref()
+        .map(|matcher| matcher.sources.as_slice())
+        .unwrap_or_default();
+    let mut sources = if configured.is_empty() {
+        vec![HookSessionSource::Startup, HookSessionSource::Resume]
+    } else {
+        configured
+            .iter()
+            .copied()
+            .filter(|source| session_start_source_supported_by_adapter(adapter, *source))
+            .collect::<Vec<_>>()
+    };
+    sources.sort_by_key(|source| match source {
+        HookSessionSource::Startup => 0,
+        HookSessionSource::Resume => 1,
+        HookSessionSource::Clear => 2,
+        HookSessionSource::Compact => 3,
+    });
+    sources.dedup_by_key(|source| source.as_str());
+    sources
 }
 
 #[derive(
