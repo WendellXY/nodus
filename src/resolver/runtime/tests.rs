@@ -68,6 +68,15 @@ fn write_skill(path: &Path, name: &str) {
     );
 }
 
+fn write_codex_agent_toml(path: &Path, name: &str, description: &str, instructions: &str) {
+    write_file(
+        path,
+        &format!(
+            "name = {name:?}\ndescription = {description:?}\ndeveloper_instructions = {instructions:?}\n"
+        ),
+    );
+}
+
 fn write_marketplace(path: &Path, contents: &str) {
     write_file(&path.join(".claude-plugin/marketplace.json"), contents);
 }
@@ -6339,8 +6348,8 @@ shared = { path = "vendor/shared", components = ["agents"] }
         sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex])
             .unwrap();
     // nodus auto-registers itself as an MCP server, generating .mcp.json,
-    // .codex/config.toml, and .codex/.gitignore
-    assert_eq!(summary.managed_file_count, 3);
+    // .codex/config.toml, .codex/.gitignore, and the selected Codex agent output
+    assert_eq!(summary.managed_file_count, 4);
 
     let lockfile = Lockfile::read(&temp.path().join(LOCKFILE_NAME)).unwrap();
     let shared = lockfile
@@ -6352,9 +6361,75 @@ shared = { path = "vendor/shared", components = ["agents"] }
         shared.selected_components,
         Some(vec![DependencyComponent::Agents])
     );
-    assert_eq!(lockfile.managed_files.len(), 3);
+    assert_eq!(lockfile.managed_files.len(), 4);
     assert!(lockfile.managed_files.contains(&String::from(".mcp.json")));
-    assert!(!temp.path().join(".codex/agents").exists());
+    assert!(temp.path().join(".codex/agents/shared.toml").exists());
+}
+
+#[test]
+fn sync_prefers_codex_specific_toml_agents_for_codex_and_markdown_for_claude() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared", components = ["agents"] }
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/shared/agents/security.md"),
+        "# Shared markdown\n",
+    );
+    write_codex_agent_toml(
+        &temp.path().join("vendor/shared/agents/security.codex.toml"),
+        "Security reviewer",
+        "Codex-specific instructions.",
+        "Use codex.",
+    );
+
+    sync_in_dir_with_adapters(
+        temp.path(),
+        cache.path(),
+        false,
+        false,
+        &[Adapter::Claude, Adapter::Codex],
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".claude/agents/security.md")).unwrap(),
+        "# Shared markdown\n"
+    );
+
+    let codex = fs::read_to_string(temp.path().join(".codex/agents/security.toml")).unwrap();
+    assert!(codex.contains("name = \"Security reviewer\""));
+    assert!(codex.contains("description = \"Codex-specific instructions.\""));
+    assert!(codex.contains("developer_instructions = \"Use codex.\""));
+}
+
+#[test]
+fn sync_emits_codex_agent_toml_from_markdown_fallback() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_manifest(
+        temp.path(),
+        r#"
+[dependencies]
+shared = { path = "vendor/shared", components = ["agents"] }
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/shared/agents/shared.md"),
+        "# Shared\n",
+    );
+
+    sync_in_dir_with_adapters(temp.path(), cache.path(), false, false, &[Adapter::Codex]).unwrap();
+
+    let codex = fs::read_to_string(temp.path().join(".codex/agents/shared.toml")).unwrap();
+    assert!(codex.contains("name = \"shared\""));
+    assert!(codex.contains("description = \"Instructions for the `shared` agent.\""));
+    assert!(codex.contains("# Shared"));
 }
 
 #[test]

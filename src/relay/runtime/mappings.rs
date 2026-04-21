@@ -6,8 +6,13 @@ use anyhow::{Context, Result, bail};
 
 use super::{DependencyContext, RelayFileMapping, RelayTransform};
 use crate::adapters::{
-    Adapter, Adapters, ArtifactKind, ManagedArtifactNames, managed_artifact_path,
-    managed_skill_root,
+    Adapter, Adapters, ArtifactKind, ManagedArtifactNames, managed_artifact_id,
+    managed_artifact_path, managed_skill_root,
+};
+use crate::agent_format::{
+    default_codex_agent_description, emitted_codex_agent_toml,
+    emitted_codex_agent_toml_from_markdown, markdown_from_codex_agent_toml,
+    source_toml_from_managed_codex, source_toml_from_managed_markdown,
 };
 use crate::manifest::SkillEntry;
 use crate::paths::strip_path_prefix;
@@ -56,29 +61,33 @@ pub(super) fn build_mappings(
         }
     }
 
-    for agent in &package.manifest.discovered.agents {
-        if !package.selects_component(crate::manifest::DependencyComponent::Agents) {
-            continue;
-        }
-        for adapter in [Adapter::Claude, Adapter::Copilot, Adapter::OpenCode] {
+    if package.selects_component(crate::manifest::DependencyComponent::Agents) {
+        for adapter in [
+            Adapter::Claude,
+            Adapter::Codex,
+            Adapter::Copilot,
+            Adapter::OpenCode,
+        ] {
             if !selected_adapters.contains(adapter) {
                 continue;
             }
-            if let Some(managed_path) = managed_artifact_path(
-                names,
-                project_root,
-                adapter,
-                ArtifactKind::Agent,
-                package,
-                &agent.id,
-            ) {
-                mappings.push(file_mapping(
-                    managed_path,
-                    Some(snapshot_root.join(&agent.path)),
-                    linked_repo.join(&agent.path),
-                    agent.id.clone(),
-                    RelayTransform::None,
-                ));
+            for agent in package.manifest.discovered.selected_agents(adapter) {
+                if let Some(managed_path) = managed_artifact_path(
+                    names,
+                    project_root,
+                    adapter,
+                    ArtifactKind::Agent,
+                    package,
+                    &agent.id,
+                ) {
+                    mappings.push(file_mapping(
+                        managed_path,
+                        Some(snapshot_root.join(&agent.path)),
+                        linked_repo.join(&agent.path),
+                        agent.id.clone(),
+                        agent_transform(names, adapter, package, agent),
+                    ));
+                }
             }
         }
     }
@@ -304,7 +313,7 @@ fn build_missing_mappings_for_adapter(
         .selects_component(crate::manifest::DependencyComponent::Agents)
         && matches!(
             adapter,
-            Adapter::Claude | Adapter::Copilot | Adapter::OpenCode
+            Adapter::Claude | Adapter::Codex | Adapter::Copilot | Adapter::OpenCode
         )
     {
         let known_agent_paths = packages
@@ -316,8 +325,8 @@ fn build_missing_mappings_for_adapter(
                 package
                     .manifest
                     .discovered
-                    .agents
-                    .iter()
+                    .selected_agents(adapter)
+                    .into_iter()
                     .filter_map(|agent| {
                         managed_artifact_path(
                             names,
@@ -345,6 +354,7 @@ fn build_missing_mappings_for_adapter(
                 }
                 let file_name = entry.file_name().to_string_lossy().into_owned();
                 let Some(agent_id) = (match adapter {
+                    Adapter::Codex => file_name.strip_suffix(".toml"),
                     Adapter::Copilot => file_name.strip_suffix(".agent.md"),
                     Adapter::Claude | Adapter::OpenCode => file_name.strip_suffix(".md"),
                     _ => None,
@@ -354,7 +364,13 @@ fn build_missing_mappings_for_adapter(
                 mappings.push(file_mapping(
                     managed_path,
                     None,
-                    linked_repo.join("agents").join(format!("{agent_id}.md")),
+                    linked_repo.join("agents").join(match adapter {
+                        Adapter::Codex => format!("{agent_id}.toml"),
+                        Adapter::Claude | Adapter::Copilot | Adapter::OpenCode => {
+                            format!("{agent_id}.md")
+                        }
+                        _ => unreachable!("unsupported agent relay adapter"),
+                    }),
                     agent_id.to_string(),
                     RelayTransform::None,
                 ));
@@ -363,6 +379,45 @@ fn build_missing_mappings_for_adapter(
     }
 
     Ok(mappings)
+}
+
+fn agent_transform(
+    names: &ManagedArtifactNames,
+    adapter: Adapter,
+    package: &ResolvedPackage,
+    agent: &crate::manifest::AgentEntry,
+) -> RelayTransform {
+    match adapter {
+        Adapter::Codex if agent.is_toml() => {
+            let managed_name = managed_artifact_id(names, package, ArtifactKind::Agent, &agent.id);
+            RelayTransform::CodexAgentToml {
+                rewritten_name: (managed_name != agent.id).then_some(managed_name),
+            }
+        }
+        Adapter::Codex => RelayTransform::CodexAgentMarkdown {
+            runtime_name: managed_artifact_id(names, package, ArtifactKind::Agent, &agent.id),
+            description: default_codex_agent_description(&agent.id),
+        },
+        Adapter::Claude => agent
+            .is_toml()
+            .then_some(RelayTransform::MarkdownAgentToml {
+                adapter_name: "Claude",
+            })
+            .unwrap_or(RelayTransform::None),
+        Adapter::Copilot => agent
+            .is_toml()
+            .then_some(RelayTransform::MarkdownAgentToml {
+                adapter_name: "GitHub Copilot",
+            })
+            .unwrap_or(RelayTransform::None),
+        Adapter::OpenCode => agent
+            .is_toml()
+            .then_some(RelayTransform::MarkdownAgentToml {
+                adapter_name: "OpenCode",
+            })
+            .unwrap_or(RelayTransform::None),
+        Adapter::Agents | Adapter::Cursor => RelayTransform::None,
+    }
 }
 
 fn skill_mappings(
@@ -472,6 +527,21 @@ impl RelayTransform {
             Self::CopilotSkillName { managed_skill_id } => {
                 crate::adapters::copilot::rewrite_skill_name(source, managed_skill_id)
             }
+            Self::CodexAgentToml { rewritten_name } => {
+                emitted_codex_agent_toml(source, rewritten_name.as_deref(), "Codex agent source")
+            }
+            Self::CodexAgentMarkdown {
+                runtime_name,
+                description,
+            } => emitted_codex_agent_toml_from_markdown(
+                source,
+                runtime_name,
+                description,
+                "Codex agent source",
+            ),
+            Self::MarkdownAgentToml { adapter_name } => {
+                markdown_from_codex_agent_toml(source, &format!("{adapter_name} agent source"))
+            }
         }
     }
 
@@ -508,6 +578,32 @@ impl RelayTransform {
                 })
                 .unwrap_or_else(|| {
                     restore_skill_name_without_baseline(managed, artifact_id, "GitHub Copilot")
+                }),
+            Self::CodexAgentToml { rewritten_name } => {
+                if let Some(rewritten_name) = rewritten_name.as_deref() {
+                    source_toml_from_managed_codex(
+                        managed,
+                        baseline_source,
+                        rewritten_name,
+                        "Codex agent source",
+                    )
+                } else {
+                    Ok(managed.to_vec())
+                }
+            }
+            Self::CodexAgentMarkdown { .. } => {
+                markdown_from_codex_agent_toml(managed, "Codex agent source")
+            }
+            Self::MarkdownAgentToml { adapter_name } => baseline_source
+                .map(|baseline_source| {
+                    source_toml_from_managed_markdown(
+                        managed,
+                        baseline_source,
+                        &format!("{adapter_name} agent source"),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    bail!("{adapter_name} agent relay needs a TOML source baseline to write back")
                 }),
         }
     }

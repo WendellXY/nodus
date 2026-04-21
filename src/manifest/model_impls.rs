@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -1156,6 +1156,41 @@ impl PackageContents {
             && self.commands.is_empty()
     }
 
+    pub fn selected_agents(&self, adapter: Adapter) -> Vec<&AgentEntry> {
+        let mut selected = BTreeMap::<&str, (u8, &AgentEntry)>::new();
+
+        for agent in &self.agents {
+            let Some(priority) = agent.adapter_priority(adapter) else {
+                continue;
+            };
+            match selected.get(agent.id.as_str()) {
+                Some((existing_priority, existing))
+                    if *existing_priority > priority
+                        || (*existing_priority == priority && existing.path <= agent.path) => {}
+                _ => {
+                    selected.insert(agent.id.as_str(), (priority, agent));
+                }
+            }
+        }
+
+        selected
+            .into_values()
+            .map(|(_, agent)| agent)
+            .collect::<Vec<_>>()
+    }
+
+    pub fn unique_agent_ids(&self) -> Vec<&String> {
+        let mut seen = HashSet::new();
+        let mut ids = Vec::new();
+        for agent in &self.agents {
+            if seen.insert(agent.id.as_str()) {
+                ids.push(&agent.id);
+            }
+        }
+        ids.sort();
+        ids
+    }
+
     pub fn files(&self, package: &LoadedManifest) -> Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         for skill in &self.skills {
@@ -1184,5 +1219,57 @@ impl PackageContents {
         files.sort();
         files.dedup();
         Ok(files)
+    }
+}
+
+impl AgentEntry {
+    pub fn adapter_priority(&self, adapter: Adapter) -> Option<u8> {
+        match adapter {
+            Adapter::Codex => {
+                if self.is_codex_specific_toml() {
+                    Some(4)
+                } else if self.is_plain_toml() {
+                    Some(3)
+                } else if self.is_plain_markdown() {
+                    Some(2)
+                } else {
+                    None
+                }
+            }
+            Adapter::Claude | Adapter::Copilot | Adapter::OpenCode => {
+                if self.is_plain_markdown() {
+                    Some(4)
+                } else if self.is_plain_toml() {
+                    Some(3)
+                } else if self.is_codex_specific_toml() {
+                    Some(2)
+                } else {
+                    None
+                }
+            }
+            Adapter::Agents | Adapter::Cursor => None,
+        }
+    }
+
+    pub fn is_markdown(&self) -> bool {
+        self.format.eq_ignore_ascii_case("md")
+    }
+
+    pub fn is_toml(&self) -> bool {
+        self.format.eq_ignore_ascii_case("toml")
+    }
+
+    pub fn is_plain_markdown(&self) -> bool {
+        self.is_markdown() && self.qualifiers.is_empty()
+    }
+
+    pub fn is_plain_toml(&self) -> bool {
+        self.is_toml() && self.qualifiers.is_empty()
+    }
+
+    pub fn is_codex_specific_toml(&self) -> bool {
+        self.is_toml()
+            && self.qualifiers.len() == 1
+            && self.qualifiers[0].eq_ignore_ascii_case("codex")
     }
 }

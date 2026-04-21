@@ -266,12 +266,7 @@ impl ManagedArtifactNames {
             if package.selects_component(DependencyComponent::Agents) {
                 track_duplicates(
                     &mut duplicate_agents,
-                    package
-                        .manifest
-                        .discovered
-                        .agents
-                        .iter()
-                        .map(|agent| &agent.id),
+                    package.manifest.discovered.unique_agent_ids(),
                 );
             }
             if package.selects_component(DependencyComponent::Rules) {
@@ -329,6 +324,15 @@ impl ManagedArtifactNames {
 
     pub fn managed_skill_id(&self, package: &ResolvedPackage, skill_id: &str) -> String {
         self.artifact_id(ArtifactKind::Skill, skill_id, package_short_id(package))
+    }
+
+    pub fn managed_artifact_id(
+        &self,
+        package: &ResolvedPackage,
+        kind: ArtifactKind,
+        artifact_id: &str,
+    ) -> String {
+        self.artifact_id(kind, artifact_id, package_short_id(package))
     }
 
     pub fn managed_file_name(
@@ -400,6 +404,7 @@ impl ArtifactKind {
                 .union(Adapters::CURSOR)
                 .union(Adapters::OPENCODE),
             Self::Agent => Adapters::CLAUDE
+                .union(Adapters::CODEX)
                 .union(Adapters::COPILOT)
                 .union(Adapters::OPENCODE),
             Self::Rule => Adapters::CLAUDE
@@ -444,6 +449,15 @@ pub fn managed_skill_id(
     skill_id: &str,
 ) -> String {
     names.managed_skill_id(package, skill_id)
+}
+
+pub fn managed_artifact_id(
+    names: &ManagedArtifactNames,
+    package: &ResolvedPackage,
+    kind: ArtifactKind,
+    artifact_id: &str,
+) -> String {
+    names.managed_artifact_id(package, kind, artifact_id)
 }
 
 pub fn runtime_root(project_root: &Path, adapter: Adapter) -> PathBuf {
@@ -495,6 +509,15 @@ pub fn managed_artifact_path(
                 kind,
                 artifact_id,
                 "md",
+            )))
+        }
+        (Adapter::Codex, ArtifactKind::Agent) => {
+            Some(runtime_root.join("agents").join(managed_file_name(
+                names,
+                package,
+                kind,
+                artifact_id,
+                "toml",
             )))
         }
         (Adapter::Claude, ArtifactKind::Command) => {

@@ -301,28 +301,47 @@ pub(crate) fn build_output_plan(
             }
         }
 
-        for agent in &package.manifest.discovered.agents {
-            if !package.selects_component(DependencyComponent::Agents) {
-                continue;
-            }
-
+        if package.selects_component(DependencyComponent::Agents) {
             if selected_adapters.contains(Adapter::Claude)
                 && ArtifactKind::Agent
                     .supported_adapters()
                     .contains(Adapter::Claude)
             {
-                merge_file(
-                    &mut plan.files,
-                    super::claude::agent_file(
-                        &managed_names,
-                        project_root,
-                        package,
-                        snapshot_root,
-                        agent,
-                    )?,
-                )?;
-                plan.managed_files
-                    .insert(format!(".claude/agents/{}.md", agent.id));
+                for agent in package.manifest.discovered.selected_agents(Adapter::Claude) {
+                    merge_file(
+                        &mut plan.files,
+                        super::claude::agent_file(
+                            &managed_names,
+                            project_root,
+                            package,
+                            snapshot_root,
+                            agent,
+                        )?,
+                    )?;
+                    plan.managed_files
+                        .insert(format!(".claude/agents/{}.md", agent.id));
+                }
+            }
+
+            if selected_adapters.contains(Adapter::Codex)
+                && ArtifactKind::Agent
+                    .supported_adapters()
+                    .contains(Adapter::Codex)
+            {
+                for agent in package.manifest.discovered.selected_agents(Adapter::Codex) {
+                    merge_file(
+                        &mut plan.files,
+                        super::codex::agent_file(
+                            &managed_names,
+                            project_root,
+                            package,
+                            snapshot_root,
+                            agent,
+                        )?,
+                    )?;
+                    plan.managed_files
+                        .insert(format!(".codex/agents/{}.toml", agent.id));
+                }
             }
 
             if selected_adapters.contains(Adapter::Copilot)
@@ -330,18 +349,24 @@ pub(crate) fn build_output_plan(
                     .supported_adapters()
                     .contains(Adapter::Copilot)
             {
-                merge_file(
-                    &mut plan.files,
-                    super::copilot::agent_file(
-                        &managed_names,
-                        project_root,
-                        package,
-                        snapshot_root,
-                        agent,
-                    )?,
-                )?;
-                plan.managed_files
-                    .insert(format!(".github/agents/{}", agent.id));
+                for agent in package
+                    .manifest
+                    .discovered
+                    .selected_agents(Adapter::Copilot)
+                {
+                    merge_file(
+                        &mut plan.files,
+                        super::copilot::agent_file(
+                            &managed_names,
+                            project_root,
+                            package,
+                            snapshot_root,
+                            agent,
+                        )?,
+                    )?;
+                    plan.managed_files
+                        .insert(format!(".github/agents/{}", agent.id));
+                }
             }
 
             if selected_adapters.contains(Adapter::OpenCode)
@@ -349,18 +374,24 @@ pub(crate) fn build_output_plan(
                     .supported_adapters()
                     .contains(Adapter::OpenCode)
             {
-                merge_file(
-                    &mut plan.files,
-                    super::opencode::agent_file(
-                        &managed_names,
-                        project_root,
-                        package,
-                        snapshot_root,
-                        agent,
-                    )?,
-                )?;
-                plan.managed_files
-                    .insert(format!(".opencode/agents/{}.md", agent.id));
+                for agent in package
+                    .manifest
+                    .discovered
+                    .selected_agents(Adapter::OpenCode)
+                {
+                    merge_file(
+                        &mut plan.files,
+                        super::opencode::agent_file(
+                            &managed_names,
+                            project_root,
+                            package,
+                            snapshot_root,
+                            agent,
+                        )?,
+                    )?;
+                    plan.managed_files
+                        .insert(format!(".opencode/agents/{}.md", agent.id));
+                }
             }
         }
 
@@ -1439,7 +1470,7 @@ mod tests {
         let agent = ArtifactKind::Agent.supported_adapters();
         assert!(!agent.contains(Adapter::Agents));
         assert!(agent.contains(Adapter::Claude));
-        assert!(!agent.contains(Adapter::Codex));
+        assert!(agent.contains(Adapter::Codex));
         assert!(agent.contains(Adapter::Copilot));
         assert!(!agent.contains(Adapter::Cursor));
         assert!(agent.contains(Adapter::OpenCode));

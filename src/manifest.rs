@@ -16,7 +16,7 @@ pub use model_impls::RequestedGitRef;
 pub(crate) use types::ClaudePluginHookCompatSource;
 #[allow(unused_imports)]
 pub use types::{
-    AdapterConfig, Capability, DependencyComponent, DependencyEntry, DependencyKind,
+    AdapterConfig, AgentEntry, Capability, DependencyComponent, DependencyEntry, DependencyKind,
     DependencySourceKind, DependencySpec, FileEntry, HookEvent, HookHandler, HookHandlerType,
     HookMatcher, HookSessionSource, HookSpec, HookTool, HookWorkingDirectory, InitSummary,
     LaunchHookConfig, LoadedManifest, MANIFEST_FILE, ManagedExportSpec, ManagedPathSpec,

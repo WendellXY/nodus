@@ -444,7 +444,7 @@ pub struct InitSummary {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PackageContents {
     pub skills: Vec<SkillEntry>,
-    pub agents: Vec<FileEntry>,
+    pub agents: Vec<AgentEntry>,
     pub rules: Vec<FileEntry>,
     pub commands: Vec<FileEntry>,
 }
@@ -453,6 +453,14 @@ pub struct PackageContents {
 pub struct SkillEntry {
     pub id: String,
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentEntry {
+    pub id: String,
+    pub path: PathBuf,
+    pub qualifiers: Vec<String>,
+    pub format: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

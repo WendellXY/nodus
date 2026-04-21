@@ -16,6 +16,7 @@ use super::types::{
 };
 use super::*;
 use crate::adapters::Adapter;
+use crate::agent_format::parse_codex_agent_config;
 use crate::git::github_slug_from_url;
 use crate::paths::{canonicalize_path, display_path, path_is_dir};
 
@@ -1345,7 +1346,7 @@ pub(super) fn discover_package_contents(
     let mut skills = Vec::new();
     let mut skill_ids = HashSet::new();
     let mut agents = Vec::new();
-    let mut agent_ids = HashSet::new();
+    let mut agent_variants = HashSet::new();
     let mut rules = Vec::new();
     let mut rule_ids = HashSet::new();
     let mut commands = Vec::new();
@@ -1357,11 +1358,10 @@ pub(super) fn discover_package_contents(
             &mut skill_ids,
             discover_skills(root, &discovery_root)?,
         )?;
-        merge_file_entries(
+        merge_agent_entries(
             &mut agents,
-            &mut agent_ids,
-            "agent",
-            discover_files(root, &discovery_root, "agents", true, false)?,
+            &mut agent_variants,
+            discover_agents(root, &discovery_root)?,
         )?;
         merge_file_entries(
             &mut rules,
@@ -1383,11 +1383,10 @@ pub(super) fn discover_package_contents(
             &mut skill_ids,
             discover_explicit_skill_roots(root, &claude_plugin.skills)?,
         )?;
-        merge_file_entries(
+        merge_agent_entries(
             &mut agents,
-            &mut agent_ids,
-            "agent",
-            discover_explicit_files(root, &claude_plugin.agents, true, Some(("agents", false)))?,
+            &mut agent_variants,
+            discover_explicit_agents(root, &claude_plugin.agents, Some(("agents", false)))?,
         )?;
         merge_file_entries(
             &mut commands,
@@ -1398,7 +1397,13 @@ pub(super) fn discover_package_contents(
     }
 
     skills.sort_by(|left, right| left.id.cmp(&right.id));
-    agents.sort_by(|left, right| left.id.cmp(&right.id));
+    agents.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then(left.path.cmp(&right.path))
+            .then(left.qualifiers.cmp(&right.qualifiers))
+            .then(left.format.cmp(&right.format))
+    });
     rules.sort_by(|left, right| left.id.cmp(&right.id));
     commands.sort_by(|left, right| left.id.cmp(&right.id));
 
@@ -1444,6 +1449,24 @@ fn merge_skill_entries(
             bail!("duplicate skill id `{}`", skill.id);
         }
         destination.push(skill);
+    }
+    Ok(())
+}
+
+fn merge_agent_entries(
+    destination: &mut Vec<AgentEntry>,
+    variants: &mut HashSet<String>,
+    discovered: Vec<AgentEntry>,
+) -> Result<()> {
+    for agent in discovered {
+        let variant_key = agent_variant_key(&agent);
+        if !variants.insert(variant_key.clone()) {
+            if destination.iter().any(|existing| existing == &agent) {
+                continue;
+            }
+            bail!("duplicate agent variant `{variant_key}`");
+        }
+        destination.push(agent);
     }
     Ok(())
 }
@@ -1551,6 +1574,60 @@ fn discover_skills_in_dir(
     Ok(found_skill)
 }
 
+fn discover_agents(root: &Path, discovery_root: &Path) -> Result<Vec<AgentEntry>> {
+    let dir_relative_root = discovery_root.join("agents");
+    let dir_root = root.join(&dir_relative_root);
+    if !dir_root.exists() {
+        return Ok(Vec::new());
+    }
+    let resolved_dir_root = canonicalize_existing_directory_path(&dir_root)
+        .map_err(|_| anyhow!("`{}` must be a directory", dir_relative_root.display()))?;
+    if !resolved_dir_root.starts_with(root) {
+        bail!("`{}` escapes the package root", dir_relative_root.display());
+    }
+    if !resolved_dir_root.is_dir() {
+        bail!("`{}` must be a directory", dir_relative_root.display());
+    }
+
+    let mut items = Vec::new();
+    let walker = walkdir::WalkDir::new(&resolved_dir_root).min_depth(1);
+    for entry in walker {
+        let entry = entry?;
+        let path = entry.path();
+        if should_ignore_discovery_entry(path) {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            bail!("`{}` entries must be files", dir_relative_root.display());
+        }
+
+        let relative = path
+            .strip_prefix(&resolved_dir_root)
+            .with_context(|| format!("failed to make {} relative", path.display()))?;
+        let logical_path = dir_relative_root.join(relative);
+        let agent = derive_agent_entry(&logical_path, relative)?;
+
+        let canonical = canonicalize_existing_path(path)?;
+        if !canonical.starts_with(root) {
+            bail!("`agents` item `{}` escapes the package root", agent.id);
+        }
+        validate_agent_entry(path, &agent)?;
+        items.push(agent);
+    }
+
+    items.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then(left.path.cmp(&right.path))
+            .then(left.qualifiers.cmp(&right.qualifiers))
+            .then(left.format.cmp(&right.format))
+    });
+    Ok(items)
+}
+
 fn discover_files(
     root: &Path,
     discovery_root: &Path,
@@ -1643,12 +1720,11 @@ fn discover_explicit_skill_roots(root: &Path, skill_roots: &[PathBuf]) -> Result
     Ok(skills)
 }
 
-fn discover_explicit_files(
+fn discover_explicit_agents(
     root: &Path,
     files: &[PathBuf],
-    markdown_only: bool,
     standard_root: Option<(&str, bool)>,
-) -> Result<Vec<FileEntry>> {
+) -> Result<Vec<AgentEntry>> {
     let mut items = Vec::new();
     for relative_path in files {
         let canonical =
@@ -1670,24 +1746,18 @@ fn discover_explicit_files(
                 relative_path.display()
             );
         }
-        if markdown_only
-            && canonical
-                .extension()
-                .and_then(|extension| extension.to_str())
-                != Some("md")
-        {
-            bail!(
-                "Claude plugin file `{}` must use the `.md` extension",
-                relative_path.display()
-            );
-        }
-        items.push(FileEntry {
-            id: derive_explicit_file_entry_id(relative_path, standard_root)?,
-            path: relative_path.clone(),
-        });
+        let agent = derive_explicit_agent_entry(relative_path, standard_root)?;
+        validate_agent_entry(&canonical, &agent)?;
+        items.push(agent);
     }
 
-    items.sort_by(|left, right| left.id.cmp(&right.id));
+    items.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then(left.path.cmp(&right.path))
+            .then(left.qualifiers.cmp(&right.qualifiers))
+            .then(left.format.cmp(&right.format))
+    });
     Ok(items)
 }
 
@@ -1748,6 +1818,104 @@ fn should_ignore_discovery_entry(path: &Path) -> bool {
         return false;
     };
     name.starts_with('.') || name.eq_ignore_ascii_case("README.md")
+}
+
+fn derive_agent_entry(logical_path: &Path, relative: &Path) -> Result<AgentEntry> {
+    let (id, qualifiers, format) = parse_agent_relative_path(relative)?;
+    Ok(AgentEntry {
+        id,
+        path: logical_path.to_path_buf(),
+        qualifiers,
+        format,
+    })
+}
+
+fn derive_explicit_agent_entry(
+    relative: &Path,
+    standard_root: Option<(&str, bool)>,
+) -> Result<AgentEntry> {
+    if let Some((root, allow_nested)) = standard_root
+        && let Ok(stripped) = relative.strip_prefix(root)
+        && (allow_nested || stripped.components().count() == 1)
+    {
+        return derive_agent_entry(relative, stripped);
+    }
+
+    derive_agent_entry(relative, relative)
+}
+
+fn parse_agent_relative_path(relative: &Path) -> Result<(String, Vec<String>, String)> {
+    let mut id_parts = Vec::new();
+    let mut components = relative.components().peekable();
+
+    while let Some(component) = components.next() {
+        let Component::Normal(value) = component else {
+            bail!("failed to derive agent id from {}", relative.display());
+        };
+        let value = value
+            .to_str()
+            .ok_or_else(|| anyhow!("failed to derive agent id from {}", relative.display()))?;
+        if components.peek().is_none() {
+            let segments = value.split('.').collect::<Vec<_>>();
+            if segments.len() < 2 {
+                bail!(
+                    "agent file `{}` must include a format extension",
+                    relative.display()
+                );
+            }
+            let format = segments.last().copied().ok_or_else(|| {
+                anyhow!("failed to derive agent format from {}", relative.display())
+            })?;
+            if format.is_empty() {
+                bail!(
+                    "agent file `{}` must include a non-empty format extension",
+                    relative.display()
+                );
+            }
+            let id_head = segments[0];
+            if id_head.is_empty() {
+                bail!(
+                    "agent file `{}` must not start with `.`",
+                    relative.display()
+                );
+            }
+            id_parts.push(id_head.to_string());
+            let qualifiers = segments[1..segments.len() - 1]
+                .iter()
+                .map(|segment| segment.to_string())
+                .collect::<Vec<_>>();
+            return Ok((id_parts.join("__"), qualifiers, format.to_string()));
+        }
+        id_parts.push(value.to_string());
+    }
+
+    bail!("failed to derive agent id from {}", relative.display());
+}
+
+fn validate_agent_entry(path: &Path, agent: &AgentEntry) -> Result<()> {
+    if !agent_uses_known_codex_toml(agent) {
+        return Ok(());
+    }
+
+    let contents = fs::read(path)
+        .with_context(|| format!("failed to read agent source {}", path.display()))?;
+    parse_codex_agent_config(&contents, &format!("agent `{}`", agent.path.display()))?;
+    Ok(())
+}
+
+fn agent_uses_known_codex_toml(agent: &AgentEntry) -> bool {
+    agent.format.eq_ignore_ascii_case("toml")
+        && (agent.qualifiers.is_empty()
+            || (agent.qualifiers.len() == 1 && agent.qualifiers[0].eq_ignore_ascii_case("codex")))
+}
+
+fn agent_variant_key(agent: &AgentEntry) -> String {
+    format!(
+        "{}|{}|{}",
+        agent.id,
+        agent.qualifiers.join("."),
+        agent.format
+    )
 }
 
 fn derive_file_entry_id(relative: &Path) -> Result<String> {

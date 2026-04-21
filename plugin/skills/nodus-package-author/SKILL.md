@@ -14,7 +14,8 @@ Help maintainers build a Nodus package that can be consumed cleanly by other wor
    - Keep artifact ids stable because Nodus uses them for managed output names and lockfile tracking.
 2. Lay out artifacts under package roots.
    - `skills/<id>/SKILL.md`
-   - `agents/<id>.md`
+   - `agents/<id>.md` for Markdown-authored agents
+   - `agents/<id>.toml` or `agents/<id>.codex.toml` for Codex-compatible TOML agents
    - `rules/<id>.*`
    - `commands/<id>.*`
 3. Add manifest configuration only where it changes behavior.

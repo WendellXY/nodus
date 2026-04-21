@@ -8,8 +8,9 @@ use crate::adapters::{
     ArtifactKind, ManagedArtifactNames, ManagedFile, ManagedHookSpec, managed_artifact_path,
     managed_skill_root,
 };
+use crate::agent_format::markdown_from_codex_agent_toml;
 use crate::hashing::blake3_hex;
-use crate::manifest::{FileEntry, SkillEntry};
+use crate::manifest::{AgentEntry, FileEntry, SkillEntry};
 use crate::manifest::{HookEvent, HookHandlerType, HookSessionSource, HookTool};
 use crate::paths::strip_path_prefix;
 use crate::resolver::ResolvedPackage;
@@ -38,20 +39,32 @@ pub fn agent_file(
     project_root: &Path,
     package: &ResolvedPackage,
     snapshot_root: &Path,
-    agent: &FileEntry,
+    agent: &AgentEntry,
 ) -> Result<ManagedFile> {
-    copy_file(
-        managed_artifact_path(
-            names,
-            project_root,
-            crate::adapters::Adapter::Claude,
-            ArtifactKind::Agent,
-            package,
-            &agent.id,
-        )
-        .expect("claude agent path"),
-        snapshot_root.join(&agent.path),
+    let target_path = managed_artifact_path(
+        names,
+        project_root,
+        crate::adapters::Adapter::Claude,
+        ArtifactKind::Agent,
+        package,
+        &agent.id,
     )
+    .expect("claude agent path");
+    let source_path = snapshot_root.join(&agent.path);
+    let contents = fs::read(&source_path)
+        .with_context(|| format!("failed to read snapshot file {}", source_path.display()))?;
+    let contents = if agent.is_toml() {
+        markdown_from_codex_agent_toml(
+            &contents,
+            &format!("Claude agent source {}", source_path.display()),
+        )?
+    } else {
+        contents
+    };
+    Ok(ManagedFile {
+        path: target_path,
+        contents,
+    })
 }
 
 pub fn command_file(

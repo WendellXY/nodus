@@ -66,8 +66,22 @@ struct RelayFileMapping {
 #[derive(Debug, Clone)]
 enum RelayTransform {
     None,
-    OpenCodeSkillName { managed_skill_id: String },
-    CopilotSkillName { managed_skill_id: String },
+    OpenCodeSkillName {
+        managed_skill_id: String,
+    },
+    CopilotSkillName {
+        managed_skill_id: String,
+    },
+    CodexAgentToml {
+        rewritten_name: Option<String>,
+    },
+    CodexAgentMarkdown {
+        runtime_name: String,
+        description: String,
+    },
+    MarkdownAgentToml {
+        adapter_name: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1052,6 +1066,15 @@ mod tests {
         file.write_all(contents.as_bytes()).unwrap();
     }
 
+    fn write_codex_agent_toml(path: &Path, name: &str, description: &str, instructions: &str) {
+        write_file(
+            path,
+            &format!(
+                "name = {name:?}\ndescription = {description:?}\ndeveloper_instructions = {instructions:?}\n"
+            ),
+        );
+    }
+
     fn append_file(path: &Path, suffix: &str) {
         let mut contents = fs::read_to_string(path).unwrap();
         contents.push_str(suffix);
@@ -1179,6 +1202,25 @@ mod tests {
         write_file(&repo_path.join("prompts/review.md"), "Review prompt.\n");
         write_file(&repo_path.join("templates/checklist.md"), "Checklist.\n");
         write_file(&repo_path.join("templates/nested/tips.md"), "Tips.\n");
+        init_git_repo(&repo_path);
+        run_git(&repo_path, &["tag", "v0.1.0"]);
+        (temp, repo_path)
+    }
+
+    fn create_remote_dependency_with_codex_toml_agent() -> (TempDir, PathBuf) {
+        let temp = TempDir::new().unwrap();
+        let repo_path = temp.path().join("playbook-codex");
+        fs::create_dir_all(&repo_path).unwrap();
+        write_file(
+            &repo_path.join("skills/review/SKILL.md"),
+            "---\nname: Review\ndescription: Example.\n---\n# Review\n",
+        );
+        write_codex_agent_toml(
+            &repo_path.join("agents/security.toml"),
+            "Security reviewer",
+            "Review security-sensitive code.",
+            "Be careful.",
+        );
         init_git_repo(&repo_path);
         run_git(&repo_path, &["tag", "v0.1.0"]);
         (temp, repo_path)
@@ -1508,6 +1550,104 @@ placement = "project"
     }
 
     #[test]
+    fn relay_writes_back_codex_agent_edits_to_toml_source() {
+        let (_remote_root, remote_repo) = create_remote_dependency_with_codex_toml_agent();
+        let linked = clone_linked_repo(&remote_repo);
+        let linked_repo = linked.path().join("linked");
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        install_dependency(
+            project.path(),
+            cache.path(),
+            &remote_repo,
+            &[Adapter::Codex],
+        );
+
+        let package = resolved_package_by_alias(
+            project.path(),
+            cache.path(),
+            &[Adapter::Codex],
+            "playbook_codex",
+        );
+        let managed_path = managed_artifact_path(
+            project.path(),
+            Adapter::Codex,
+            ArtifactKind::Agent,
+            &package,
+            "security",
+        )
+        .unwrap();
+        write_codex_agent_toml(
+            &managed_path,
+            "Security reviewer",
+            "Review security-sensitive code.",
+            "Be extra careful.",
+        );
+
+        let summary = relay_dependency_in_dir(
+            project.path(),
+            cache.path(),
+            "playbook_codex",
+            Some(&linked_repo),
+            Some(Adapter::Codex),
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.updated_file_count, 1);
+        let relayed = fs::read_to_string(linked_repo.join("agents/security.toml")).unwrap();
+        assert!(relayed.contains("name = \"Security reviewer\""));
+        assert!(relayed.contains("developer_instructions = \"Be extra careful.\""));
+    }
+
+    #[test]
+    fn relay_writes_back_codex_agent_edits_to_markdown_source() {
+        let (_remote_root, remote_repo) = create_remote_dependency();
+        let linked = clone_linked_repo(&remote_repo);
+        let linked_repo = linked.path().join("linked");
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        install_dependency(
+            project.path(),
+            cache.path(),
+            &remote_repo,
+            &[Adapter::Codex],
+        );
+
+        let package = resolved_package(project.path(), cache.path(), &[Adapter::Codex]);
+        let managed_path = managed_artifact_path(
+            project.path(),
+            Adapter::Codex,
+            ArtifactKind::Agent,
+            &package,
+            "security",
+        )
+        .unwrap();
+        write_codex_agent_toml(
+            &managed_path,
+            "security",
+            "Instructions for the `security` agent.",
+            "# Security\nUpdated from Codex.\n",
+        );
+
+        let summary = relay_dependency_in_dir(
+            project.path(),
+            cache.path(),
+            "playbook_ios",
+            Some(&linked_repo),
+            Some(Adapter::Codex),
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.updated_file_count, 1);
+        assert_eq!(
+            fs::read_to_string(linked_repo.join("agents/security.md")).unwrap(),
+            "# Security\nUpdated from Codex.\n"
+        );
+    }
+
+    #[test]
     fn relay_create_missing_is_opt_in() {
         let (_remote_root, remote_repo) = create_remote_dependency();
         let linked = clone_linked_repo(&remote_repo);
@@ -1600,6 +1740,43 @@ placement = "project"
             fs::read_to_string(linked_repo.join("agents/auditor.md")).unwrap(),
             "# Auditor\n"
         );
+    }
+
+    #[test]
+    fn relay_create_missing_copies_new_codex_agent_into_toml_source() {
+        let (_remote_root, remote_repo) = create_remote_dependency();
+        let linked = clone_linked_repo(&remote_repo);
+        let linked_repo = linked.path().join("linked");
+        let project = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+        install_dependency(
+            project.path(),
+            cache.path(),
+            &remote_repo,
+            &[Adapter::Codex],
+        );
+
+        write_codex_agent_toml(
+            &project.path().join(".codex/agents/auditor.toml"),
+            "auditor",
+            "Instructions for the `auditor` agent.",
+            "Audit changes carefully.",
+        );
+
+        let summary = relay_dependency_in_dir_create_missing(
+            project.path(),
+            cache.path(),
+            "playbook_ios",
+            Some(&linked_repo),
+            Some(Adapter::Codex),
+            &Reporter::silent(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.created_file_count, 1);
+        let relayed = fs::read_to_string(linked_repo.join("agents/auditor.toml")).unwrap();
+        assert!(relayed.contains("name = \"auditor\""));
+        assert!(relayed.contains("developer_instructions = \"Audit changes carefully.\""));
     }
 
     #[test]

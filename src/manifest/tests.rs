@@ -64,6 +64,15 @@ fn write_skill(root: &Path, name: &str) {
     );
 }
 
+fn write_codex_agent_toml(path: &Path, name: &str, description: &str, instructions: &str) {
+    write_file(
+        path,
+        &format!(
+            "name = {name:?}\ndescription = {description:?}\ndeveloper_instructions = {instructions:?}\n"
+        ),
+    );
+}
+
 fn write_directory_placeholder(path: &Path, target: &str) {
     write_file(path, target);
 }
@@ -2338,6 +2347,74 @@ fn discovers_agents_rules_and_commands() {
     assert_eq!(loaded.discovered.agents[0].id, "security");
     assert_eq!(loaded.discovered.rules[0].id, "default");
     assert_eq!(loaded.discovered.commands[0].id, "build");
+}
+
+#[test]
+fn discovers_agent_variants_with_future_qualifiers() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(&temp.path().join("agents/security.md"), "# Security\n");
+    write_codex_agent_toml(
+        &temp.path().join("agents/security.codex.toml"),
+        "Security reviewer",
+        "Codex-specific instructions.",
+        "Use codex.",
+    );
+    write_file(
+        &temp.path().join("agents/security.gemini.toml"),
+        "name = \"Security gemini\"\n\
+description = \"Gemini-specific instructions.\"\n\
+developer_instructions = \"Use gemini.\"\n",
+    );
+
+    let loaded = load_root_from_dir(temp.path()).unwrap();
+
+    assert_eq!(loaded.discovered.agents.len(), 3);
+    assert_eq!(
+        loaded
+            .discovered
+            .agents
+            .iter()
+            .map(|agent| {
+                (
+                    agent.id.as_str(),
+                    agent.qualifiers.clone(),
+                    agent.format.as_str(),
+                    agent.path.as_path(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "security",
+                vec![String::from("codex")],
+                "toml",
+                Path::new("agents/security.codex.toml"),
+            ),
+            (
+                "security",
+                vec![String::from("gemini")],
+                "toml",
+                Path::new("agents/security.gemini.toml"),
+            ),
+            ("security", vec![], "md", Path::new("agents/security.md")),
+        ]
+    );
+}
+
+#[test]
+fn rejects_invalid_plain_toml_agent_missing_required_codex_fields() {
+    let temp = TempDir::new().unwrap();
+    write_valid_skill(temp.path());
+    write_file(
+        &temp.path().join("agents/security.toml"),
+        "name = \"Security reviewer\"\n\
+developer_instructions = \"Use codex.\"\n",
+    );
+
+    let error = load_root_from_dir(temp.path()).unwrap_err().to_string();
+
+    assert!(error.contains("agents/security.toml"));
 }
 
 #[test]

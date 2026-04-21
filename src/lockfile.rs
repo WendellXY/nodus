@@ -441,6 +441,7 @@ fn expand_managed_root_with_names(
                             };
                             ids.map(|artifact_id| {
                                 let extension = match (runtime.as_str(), kind) {
+                                    (".codex", ArtifactKind::Agent) => "toml",
                                     (".cursor", ArtifactKind::Rule) => "mdc",
                                     _ => "md",
                                 };

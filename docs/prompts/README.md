@@ -611,7 +611,7 @@ nodus relay <dependency> --repo-path ../maintainer-checkout --via copilot --crea
 
 When explaining `--create-missing`, be explicit:
 
-- it only creates missing source files for `skills/<id>/...` and `agents/<id>.md`
+- it only creates missing source files for `skills/<id>/...`, `agents/<id>.md`, and `agents/<id>.toml`
 - this is an **explicit opt-in** capability and should not be enabled automatically
 - `--via <adapter>` tells Nodus which adapter's managed output should be treated as the canonical source when creating new source files
 

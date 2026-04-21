@@ -1075,12 +1075,7 @@ impl Resolution {
                 agents: emitted_artifact_ids(
                     package,
                     DependencyComponent::Agents,
-                    package
-                        .manifest
-                        .discovered
-                        .agents
-                        .iter()
-                        .map(|item| &item.id),
+                    package.manifest.discovered.unique_agent_ids().into_iter(),
                 ),
                 rules: emitted_artifact_ids(
                     package,
@@ -1226,11 +1221,11 @@ fn derivable_runtime_artifact_entries(
         }
 
         if package.selects_component(DependencyComponent::Agents) {
-            for agent in &package.manifest.discovered.agents {
-                for adapter in ArtifactKind::Agent.supported_adapters().iter() {
-                    if !selected_adapters.contains(adapter) {
-                        continue;
-                    }
+            for adapter in ArtifactKind::Agent.supported_adapters().iter() {
+                if !selected_adapters.contains(adapter) {
+                    continue;
+                }
+                for agent in package.manifest.discovered.selected_agents(adapter) {
                     if let Some(path) = crate::adapters::managed_artifact_path(
                         &names,
                         runtime_root,

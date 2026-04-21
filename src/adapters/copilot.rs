@@ -7,7 +7,8 @@ use crate::adapters::{
     ArtifactKind, ManagedArtifactNames, ManagedFile, managed_artifact_path, managed_skill_id,
     managed_skill_root,
 };
-use crate::manifest::{FileEntry, SkillEntry};
+use crate::agent_format::markdown_from_codex_agent_toml;
+use crate::manifest::{AgentEntry, SkillEntry};
 use crate::paths::strip_path_prefix;
 use crate::resolver::ResolvedPackage;
 
@@ -59,29 +60,31 @@ pub fn agent_file(
     project_root: &Path,
     package: &ResolvedPackage,
     snapshot_root: &Path,
-    agent: &FileEntry,
+    agent: &AgentEntry,
 ) -> Result<ManagedFile> {
-    copy_file(
-        managed_artifact_path(
-            names,
-            project_root,
-            crate::adapters::Adapter::Copilot,
-            ArtifactKind::Agent,
-            package,
-            &agent.id,
-        )
-        .expect("copilot agent path"),
-        snapshot_root.join(&agent.path),
+    let target_path = managed_artifact_path(
+        names,
+        project_root,
+        crate::adapters::Adapter::Copilot,
+        ArtifactKind::Agent,
+        package,
+        &agent.id,
     )
-}
-
-fn copy_file(target_path: impl AsRef<Path>, source_path: impl AsRef<Path>) -> Result<ManagedFile> {
-    let target_path = target_path.as_ref();
-    let source_path = source_path.as_ref();
+    .expect("copilot agent path");
+    let source_path = snapshot_root.join(&agent.path);
+    let contents = fs::read(&source_path)
+        .with_context(|| format!("failed to read snapshot file {}", source_path.display()))?;
+    let contents = if agent.is_toml() {
+        markdown_from_codex_agent_toml(
+            &contents,
+            &format!("GitHub Copilot agent source {}", source_path.display()),
+        )?
+    } else {
+        contents
+    };
     Ok(ManagedFile {
-        path: target_path.to_path_buf(),
-        contents: fs::read(source_path)
-            .with_context(|| format!("failed to read snapshot file {}", source_path.display()))?,
+        path: target_path,
+        contents,
     })
 }
 

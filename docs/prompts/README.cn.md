@@ -612,7 +612,7 @@ nodus relay <dependency> --repo-path ../maintainer-checkout --via copilot --crea
 
 解释 `--create-missing` 时要说清楚：
 
-- 它只会为缺失的源文件创建 `skills/<id>/...` 和 `agents/<id>.md`
+- 它只会为缺失的源文件创建 `skills/<id>/...`、`agents/<id>.md` 和 `agents/<id>.toml`
 - 这是**显式 opt-in** 能力，不要默认替用户打开
 - `--via <adapter>` 用来指定把哪个 adapter 的受管理输出当成创建新源文件的规范来源
 

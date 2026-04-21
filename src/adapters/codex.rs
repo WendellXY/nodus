@@ -4,9 +4,16 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
 
-use crate::adapters::{ManagedArtifactNames, ManagedFile, ManagedHookSpec, managed_skill_root};
+use crate::adapters::{
+    ArtifactKind, ManagedArtifactNames, ManagedFile, ManagedHookSpec, managed_artifact_id,
+    managed_artifact_path, managed_skill_root,
+};
+use crate::agent_format::{
+    default_codex_agent_description, emitted_codex_agent_toml,
+    emitted_codex_agent_toml_from_markdown,
+};
 use crate::hashing::blake3_hex;
-use crate::manifest::SkillEntry;
+use crate::manifest::{AgentEntry, SkillEntry};
 use crate::manifest::{HookEvent, HookHandlerType, HookSessionSource, HookTool};
 use crate::paths::strip_path_prefix;
 use crate::resolver::ResolvedPackage;
@@ -28,6 +35,48 @@ pub fn skill_files(
         ),
         snapshot_root.join(&skill.path),
     )
+}
+
+pub fn agent_file(
+    names: &ManagedArtifactNames,
+    project_root: &Path,
+    package: &ResolvedPackage,
+    snapshot_root: &Path,
+    agent: &AgentEntry,
+) -> Result<ManagedFile> {
+    let target_path = managed_artifact_path(
+        names,
+        project_root,
+        crate::adapters::Adapter::Codex,
+        ArtifactKind::Agent,
+        package,
+        &agent.id,
+    )
+    .expect("codex agent path");
+    let source_path = snapshot_root.join(&agent.path);
+    let source_contents = fs::read(&source_path)
+        .with_context(|| format!("failed to read snapshot file {}", source_path.display()))?;
+    let managed_name = managed_artifact_id(names, package, ArtifactKind::Agent, &agent.id);
+    let contents = if agent.is_toml() {
+        let runtime_name = (managed_name != agent.id).then_some(managed_name.as_str());
+        emitted_codex_agent_toml(
+            &source_contents,
+            runtime_name,
+            &format!("Codex agent source {}", source_path.display()),
+        )?
+    } else {
+        emitted_codex_agent_toml_from_markdown(
+            &source_contents,
+            &managed_name,
+            &default_codex_agent_description(&agent.id),
+            &format!("Codex agent source {}", source_path.display()),
+        )?
+    };
+
+    Ok(ManagedFile {
+        path: target_path,
+        contents,
+    })
 }
 
 fn copy_directory(
