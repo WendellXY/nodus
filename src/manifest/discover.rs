@@ -15,6 +15,7 @@ use super::types::{
     CodexPluginMetadata, SkillFrontmatter,
 };
 use super::*;
+use crate::adapters::Adapter;
 use crate::git::github_slug_from_url;
 use crate::paths::{canonicalize_path, display_path, path_is_dir};
 
@@ -575,6 +576,9 @@ pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Resu
             .into_iter()
             .map(ClaudePluginHookCompatSource::Path),
     );
+    if manifest_declares_native_claude_hooks(&loaded.manifest) {
+        extras.hook_compat_sources.clear();
+    }
     dedupe_claude_plugin_hook_compat_sources(&mut extras.hook_compat_sources);
     if !metadata_exists && extras.is_empty() {
         return Ok(());
@@ -637,6 +641,13 @@ pub(super) fn import_claude_plugin_metadata(loaded: &mut LoadedManifest) -> Resu
     loaded.extra_package_files.sort();
     loaded.extra_package_files.dedup();
     Ok(())
+}
+
+fn manifest_declares_native_claude_hooks(manifest: &Manifest) -> bool {
+    manifest
+        .hooks
+        .iter()
+        .any(|hook| hook.adapters.is_empty() || hook.adapters.contains(&Adapter::Claude))
 }
 
 fn dedupe_claude_plugin_hook_compat_sources(sources: &mut Vec<ClaudePluginHookCompatSource>) {
