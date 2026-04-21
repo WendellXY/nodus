@@ -1260,16 +1260,20 @@ fn hook_files(
     let mut files = Vec::new();
 
     let claude_hooks = hooks_for_adapter(hooks, selected_adapters, Adapter::Claude);
-    let claude_plugin_packages = packages
-        .iter()
-        .filter(|(package, _)| {
-            !package
-                .manifest
-                .claude_plugin_hook_compat_sources()
-                .is_empty()
-        })
-        .map(|(package, snapshot_root)| (package, snapshot_root.as_path()))
-        .collect::<Vec<_>>();
+    let claude_plugin_packages = if selected_adapters.contains(Adapter::Claude) {
+        packages
+            .iter()
+            .filter(|(package, _)| {
+                !package
+                    .manifest
+                    .claude_plugin_hook_compat_sources()
+                    .is_empty()
+            })
+            .map(|(package, snapshot_root)| (package, snapshot_root.as_path()))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     if !claude_hooks.is_empty() || !claude_plugin_packages.is_empty() {
         let (claude_files, claude_warnings) = super::claude::hook_files(
             project_root,

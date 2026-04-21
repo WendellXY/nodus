@@ -2420,6 +2420,152 @@ path = "vendor/hook-plugin"
 }
 
 #[test]
+fn sync_keeps_claude_plugin_hook_compat_disabled_for_codex_startup_hooks() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    write_manifest(
+        temp.path(),
+        r#"
+[adapters]
+enabled = ["codex"]
+
+[launch_hooks]
+sync_on_startup = true
+
+[dependencies.hook_plugin]
+path = "vendor/hook-plugin"
+"#,
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/.claude-plugin/plugin.json"),
+        r#"{
+  "name": "hook-plugin"
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/hook-plugin/hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/format-code.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/scripts/format-code.sh"),
+        "#!/usr/bin/env bash\nexit 0\n",
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    assert!(temp.path().join(".codex/hooks.json").exists());
+    assert!(!temp.path().join(".claude").exists());
+    assert!(
+        !temp
+            .path()
+            .join(".nodus/packages/hook_plugin/claude-plugin")
+            .exists()
+    );
+}
+
+#[test]
+fn doctor_accepts_claude_plugin_hook_compat_after_first_sync() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+
+    write_manifest(
+        temp.path(),
+        r#"
+[adapters]
+enabled = ["claude"]
+
+[dependencies.hook_plugin]
+path = "vendor/hook-plugin"
+"#,
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/.claude-plugin/plugin.json"),
+        r#"{
+  "name": "hook-plugin"
+}
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/hook-plugin/hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/format-code.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+"#,
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/scripts/format-code.sh"),
+        "#!/usr/bin/env bash\nexit 0\n",
+    );
+    write_file(
+        &temp.path().join("vendor/hook-plugin/README.md"),
+        "# Hook Plugin\n",
+    );
+    write_file(
+        &temp.path().join("vendor/hook-plugin/CONTRIBUTING.md"),
+        "Follow the guide.\n",
+    );
+    write_file(
+        &temp
+            .path()
+            .join("vendor/hook-plugin/references/testing-patterns.md"),
+        "Test patterns.\n",
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let summary = doctor_in_dir_with_mode(
+        temp.path(),
+        cache.path(),
+        DoctorMode::Check,
+        &Reporter::silent(),
+    )
+    .unwrap();
+
+    assert_eq!(summary.status, DoctorStatus::Healthy);
+    assert!(summary.findings.is_empty());
+    assert!(
+        temp.path()
+            .join(".nodus/packages/hook_plugin/claude-plugin/hooks/hooks.json")
+            .exists()
+    );
+}
+
+#[test]
 fn add_dependency_accepts_all_claude_marketplace_remote_sources_and_syncs_contents() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

@@ -132,8 +132,9 @@ pub fn hook_files(
         // We materialize a plugin-like root under `.nodus/packages/...` so
         // `${CLAUDE_PLUGIN_ROOT}` commands keep working without treating these
         // configs as portable Nodus hooks.
-        files.extend(copy_directory(
+        files.extend(copy_package_files(
             plugin_install_root(project_root, package),
+            package,
             snapshot_root,
         )?);
 
@@ -175,6 +176,28 @@ fn copy_directory(
                 })?,
             });
         }
+    }
+
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn copy_package_files(
+    target_root: impl AsRef<Path>,
+    package: &ResolvedPackage,
+    source_root: impl AsRef<Path>,
+) -> Result<Vec<ManagedFile>> {
+    let target_root = target_root.as_ref();
+    let source_root = source_root.as_ref();
+    let mut files = Vec::new();
+
+    for path in package.manifest.package_files()? {
+        let relative = strip_path_prefix(&path, &package.manifest.root)
+            .with_context(|| format!("failed to make {} relative", path.display()))?;
+        files.push(copy_file(
+            target_root.join(relative),
+            source_root.join(relative),
+        )?);
     }
 
     files.sort_by(|left, right| left.path.cmp(&right.path));
