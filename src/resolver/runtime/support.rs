@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use dialoguer::Select;
 use rayon::prelude::*;
 
 use super::{
@@ -17,6 +18,7 @@ use crate::lockfile::Lockfile;
 use crate::manifest::{LoadedManifest, load_dependency_from_dir};
 use crate::paths::{display_path, strip_path_prefix};
 use crate::report::Reporter;
+use crate::selection::interactive_select_theme;
 use crate::store::write_atomic;
 
 #[allow(clippy::too_many_arguments)]
@@ -410,6 +412,43 @@ fn prompt_for_managed_collision(
     input: &mut impl BufRead,
     output: &mut impl Write,
 ) -> Result<ManagedCollisionChoice> {
+    render_managed_collision_notice(project_root, collision, output)?;
+    if !cfg!(test) && io::stdin().is_terminal() && io::stderr().is_terminal() {
+        writeln!(
+            output,
+            "Use arrow keys to choose how Nodus should continue, then press Enter."
+        )?;
+        output.flush()?;
+        return prompt_for_managed_collision_interactive(collision);
+    }
+
+    writeln!(output, "Choose how to continue:")?;
+    writeln!(
+        output,
+        "  1. adopt  (let Nodus take ownership and overwrite managed files under that target)"
+    )?;
+    if collision.source == ManagedCollisionSource::LegacyDependencyMapping {
+        writeln!(
+            output,
+            "  2. remove (delete the corresponding managed mapping from nodus.toml and continue)"
+        )?;
+        writeln!(output, "  3. cancel")?;
+    } else {
+        writeln!(output, "  2. cancel")?;
+    }
+    write!(output, "> ")?;
+    output.flush()?;
+
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    parse_managed_collision_choice(&line, collision.source)
+}
+
+fn render_managed_collision_notice(
+    project_root: &Path,
+    collision: &ManagedCollision,
+    output: &mut impl Write,
+) -> Result<()> {
     match collision.source {
         ManagedCollisionSource::LegacyDependencyMapping
         | ManagedCollisionSource::PackageManagedExport => {
@@ -435,26 +474,58 @@ fn prompt_for_managed_collision(
             )?;
         }
     }
-    writeln!(output, "Choose how to continue:")?;
-    writeln!(
-        output,
-        "  1. adopt  (let Nodus take ownership and overwrite managed files under that target)"
-    )?;
-    if collision.source == ManagedCollisionSource::LegacyDependencyMapping {
-        writeln!(
-            output,
-            "  2. remove (delete the corresponding managed mapping from nodus.toml and continue)"
-        )?;
-        writeln!(output, "  3. cancel")?;
-    } else {
-        writeln!(output, "  2. cancel")?;
-    }
-    write!(output, "> ")?;
-    output.flush()?;
+    Ok(())
+}
 
-    let mut line = String::new();
-    input.read_line(&mut line)?;
-    parse_managed_collision_choice(&line, collision.source)
+fn prompt_for_managed_collision_interactive(
+    collision: &ManagedCollision,
+) -> Result<ManagedCollisionChoice> {
+    let items = managed_collision_prompt_items(collision.source);
+    let selection = Select::with_theme(&interactive_select_theme())
+        .with_prompt("Choose how Nodus should continue")
+        .items(&items)
+        .default(0)
+        .interact_on_opt(&dialoguer::console::Term::stderr())?;
+
+    Ok(match selection {
+        Some(index) => managed_collision_choice_for_index(collision.source, index)?,
+        None => ManagedCollisionChoice::Cancel,
+    })
+}
+
+fn managed_collision_prompt_items(source: ManagedCollisionSource) -> Vec<&'static str> {
+    match source {
+        ManagedCollisionSource::LegacyDependencyMapping => vec![
+            "Adopt and overwrite the managed target",
+            "Remove the legacy managed mapping from nodus.toml",
+            "Cancel sync",
+        ],
+        ManagedCollisionSource::PackageManagedExport => vec![
+            "Adopt and overwrite the package-managed export",
+            "Cancel sync",
+        ],
+        ManagedCollisionSource::RuntimeOutput => {
+            vec!["Adopt and overwrite this runtime output", "Cancel sync"]
+        }
+    }
+}
+
+fn managed_collision_choice_for_index(
+    source: ManagedCollisionSource,
+    index: usize,
+) -> Result<ManagedCollisionChoice> {
+    match (source, index) {
+        (_, 0) => Ok(ManagedCollisionChoice::Adopt),
+        (ManagedCollisionSource::LegacyDependencyMapping, 1) => {
+            Ok(ManagedCollisionChoice::RemoveMapping)
+        }
+        (ManagedCollisionSource::LegacyDependencyMapping, 2)
+        | (
+            ManagedCollisionSource::PackageManagedExport | ManagedCollisionSource::RuntimeOutput,
+            1,
+        ) => Ok(ManagedCollisionChoice::Cancel),
+        (_, other) => bail!("invalid collision selection index `{other}`"),
+    }
 }
 
 fn parse_managed_collision_choice(

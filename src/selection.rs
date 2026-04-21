@@ -190,7 +190,7 @@ fn is_global_supported(adapter: Adapter) -> bool {
 fn prompt_for_adapter(project_root: &Path) -> Result<Adapter> {
     render_missing_adapter_notice(project_root)?;
 
-    let selection = Select::with_theme(&adapter_prompt_theme())
+    let selection = Select::with_theme(&interactive_select_theme())
         .with_prompt("Select an adapter to install")
         .items(adapter_prompt_items())
         .default(0)
@@ -232,7 +232,7 @@ fn adapter_prompt_items() -> &'static [&'static str; Adapter::ALL.len()] {
     &["agents", "claude", "codex", "copilot", "cursor", "opencode"]
 }
 
-fn adapter_prompt_theme() -> ColorfulTheme {
+pub(crate) fn interactive_select_theme() -> ColorfulTheme {
     ColorfulTheme {
         active_item_style: dialoguer::console::Style::new().cyan().bold(),
         active_item_prefix: dialoguer::console::Style::new()
