@@ -12,7 +12,7 @@ use super::{
     hook_supported_by_adapter,
 };
 use crate::lockfile::{Lockfile, managed_mcp_server_name};
-use crate::manifest::{DependencyComponent, HookSpec, McpServerConfig};
+use crate::manifest::{DependencyComponent, HookSpec, Manifest, McpServerConfig};
 use crate::paths::{display_path, strip_path_prefix};
 use crate::resolver::{PackageSource, ResolvedPackage};
 
@@ -95,42 +95,41 @@ fn managed_nodus_args() -> Vec<String> {
 }
 
 fn collected_hooks(packages: &[(ResolvedPackage, PathBuf)]) -> Vec<ManagedHookSpec> {
-    let mut hooks = packages
+    let mut hooks = Vec::new();
+    let mut saw_sync_on_launch_hook = false;
+    let mut push_hook = |package_alias: &str, emitted_from_root: bool, hook: HookSpec| {
+        if Manifest::is_sync_on_launch_hook(&hook) {
+            if saw_sync_on_launch_hook {
+                return;
+            }
+            saw_sync_on_launch_hook = true;
+        }
+
+        hooks.push(ManagedHookSpec {
+            package_alias: package_alias.to_string(),
+            emitted_from_root,
+            hook,
+        });
+    };
+
+    if let Some((package, _)) = packages
         .iter()
         .find(|(package, _)| matches!(package.source, PackageSource::Root))
-        .map(|(package, _)| {
-            package
-                .manifest
-                .manifest
-                .effective_hooks()
-                .into_iter()
-                .map(|hook| ManagedHookSpec {
-                    package_alias: package.alias.clone(),
-                    emitted_from_root: true,
-                    hook,
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    hooks.extend(
-        packages
-            .iter()
-            .filter(|(package, _)| !matches!(package.source, PackageSource::Root))
-            .flat_map(|(package, _)| {
-                package
-                    .manifest
-                    .manifest
-                    .hooks
-                    .iter()
-                    .cloned()
-                    .map(|hook| ManagedHookSpec {
-                        package_alias: package.alias.clone(),
-                        emitted_from_root: false,
-                        hook,
-                    })
-                    .collect::<Vec<_>>()
-            }),
-    );
+    {
+        for hook in package.manifest.manifest.effective_hooks() {
+            push_hook(&package.alias, true, hook);
+        }
+    }
+
+    for (package, _) in packages
+        .iter()
+        .filter(|(package, _)| !matches!(package.source, PackageSource::Root))
+    {
+        for hook in package.manifest.manifest.hooks.iter().cloned() {
+            push_hook(&package.alias, false, hook);
+        }
+    }
+
     hooks
 }
 

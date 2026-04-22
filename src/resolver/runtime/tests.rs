@@ -5447,6 +5447,126 @@ sync_on_startup = true
 }
 
 #[test]
+fn sync_deduplicates_startup_sync_hook_across_root_and_dependency_packages() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_manifest(
+        temp.path(),
+        r#"
+[adapters]
+enabled = ["claude", "codex", "opencode"]
+
+[launch_hooks]
+sync_on_startup = true
+
+[dependencies.ena]
+path = "vendor/ena"
+
+[dependencies.fuli]
+path = "vendor/fuli"
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/ena/nodus.toml"),
+        r#"
+[[hooks]]
+id = "nodus.sync_on_startup"
+event = "session_start"
+
+[hooks.matcher]
+sources = ["startup", "resume"]
+
+[hooks.handler]
+type = "command"
+command = "nodus sync"
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/fuli/nodus.toml"),
+        r#"
+[[hooks]]
+id = "nodus.sync_on_startup"
+event = "session_start"
+
+[hooks.matcher]
+sources = ["startup", "resume"]
+
+[hooks.handler]
+type = "command"
+command = "nodus sync"
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let claude_hooks = temp.path().join(".claude/hooks");
+    let claude_hook_files = fs::read_dir(&claude_hooks)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(claude_hook_files.len(), 1);
+    assert!(
+        claude_hook_files[0].starts_with("nodus-hook-nodus-sync-on-startup-"),
+        "unexpected Claude hook files: {claude_hook_files:?}"
+    );
+
+    let codex_hooks = temp.path().join(".codex/hooks");
+    let codex_hook_files = fs::read_dir(&codex_hooks)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(codex_hook_files.len(), 1);
+    assert!(
+        codex_hook_files[0].starts_with("nodus-hook-nodus-sync-on-startup-"),
+        "unexpected Codex hook files: {codex_hook_files:?}"
+    );
+
+    let opencode_scripts = temp.path().join(".opencode/scripts");
+    let opencode_hook_files = fs::read_dir(&opencode_scripts)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(opencode_hook_files.len(), 1);
+    assert!(
+        opencode_hook_files[0].starts_with("nodus-hook-nodus-sync-on-startup-"),
+        "unexpected OpenCode hook files: {opencode_hook_files:?}"
+    );
+
+    let claude_settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        claude_settings["hooks"]["SessionStart"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let codex_hooks_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        codex_hooks_json["hooks"]["SessionStart"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let opencode_plugin =
+        fs::read_to_string(temp.path().join(".opencode/plugins/nodus-hooks.js")).unwrap();
+    assert_eq!(
+        opencode_plugin
+            .matches(".opencode/scripts/nodus-hook-")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn sync_merges_codex_startup_hook_into_existing_hooks_without_duplicates() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

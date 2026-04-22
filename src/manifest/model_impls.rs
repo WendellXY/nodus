@@ -518,7 +518,7 @@ impl Manifest {
         }
     }
 
-    fn is_sync_on_launch_hook(hook: &HookSpec) -> bool {
+    pub(crate) fn is_sync_on_launch_hook(hook: &HookSpec) -> bool {
         hook.id == LEGACY_SYNC_ON_STARTUP_HOOK_ID
     }
 
