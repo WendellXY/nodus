@@ -324,7 +324,14 @@ fn hook_entry(hook: &ManagedHookSpec) -> Value {
 }
 
 fn remove_managed_hook_entries(hooks: &mut Map<String, Value>) {
-    for event in ["SessionStart", "PreToolUse", "PostToolUse", "Stop"] {
+    for event in [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PermissionRequest",
+        "PostToolUse",
+        "Stop",
+    ] {
         let Some(entries) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
             continue;
         };

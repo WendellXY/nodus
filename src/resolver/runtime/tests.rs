@@ -6065,6 +6065,60 @@ command = "./scripts/approve.sh"
 }
 
 #[test]
+fn sync_deduplicates_managed_codex_user_prompt_and_permission_request_hooks() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[adapters]
+enabled = ["codex"]
+
+[[hooks]]
+id = "prompt-logger"
+event = "user_prompt_submit"
+
+[hooks.handler]
+type = "command"
+command = "./scripts/log-prompt.sh"
+
+[[hooks]]
+id = "bash-approval"
+event = "permission_request"
+
+[hooks.matcher]
+tool_names = ["bash"]
+
+[hooks.handler]
+type = "command"
+command = "./scripts/approve.sh"
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let codex_hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        codex_hooks["hooks"]["UserPromptSubmit"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        codex_hooks["hooks"]["PermissionRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn sync_rejects_claude_only_declaration_of_codex_permission_request() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
