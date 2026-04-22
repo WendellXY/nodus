@@ -129,25 +129,16 @@ When a package publishes `[[hooks]]`, Nodus filters those hook intents by what e
 | Adapter | Native hook events | `session_start` sources |
 |---------|--------------------|-------------------------|
 | `claude` | `session_start`, `user_prompt_submit`, `pre_tool_use`, `post_tool_use`, `stop`, `session_end` | `startup`, `resume`, `clear`, `compact` |
-| `codex` | `session_start`, `pre_tool_use`, `post_tool_use`, `stop` | `startup`, `resume` |
+| `codex` | `session_start`, `user_prompt_submit`, `pre_tool_use`, `permission_request`, `post_tool_use`, `stop` | `startup`, `resume` |
 | `opencode` | `session_start`, `pre_tool_use`, `post_tool_use`, `stop` | `startup` |
 | `agents` | none | none |
 | `copilot` | none | none |
 | `cursor` | none | none |
 
-If you want to inspect the exact matrix for one package, run:
-
-```bash
-nodus info <package> --json
-```
-
-That output now includes adapter hook capability data derived from the same rules Nodus uses during sync.
-
-Packages that intentionally ship Claude plugin hook config from a `hooks/`
-folder can declare it explicitly in `nodus.toml` with
-`claude_plugin_hooks = ["hooks/hooks.json"]`. This keeps the behavior
-adapter-specific for Claude and uses the existing `CLAUDE_PLUGIN_ROOT`
-compatibility path instead of portable native `[[hooks]]`.
+See [docs/hooks.md](docs/hooks.md) for the full hook reference: matcher
+rules per event, handler configuration, runtime environment, `nodus info`
+inspection, and the `claude_plugin_hooks` escape hatch for Claude plugin
+packages that ship a pre-built `hooks/hooks.json`.
 
 ## CLI Help
 
