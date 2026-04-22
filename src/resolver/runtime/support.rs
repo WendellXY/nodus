@@ -198,6 +198,7 @@ fn planned_paths_to_replace(
                     && !desired_paths
                         .iter()
                         .any(|desired| desired != parent && desired.starts_with(parent))
+                    && !directory_exactly_matches_planned_files(project_root, parent, planned_files)
                     && removed.insert(parent.to_path_buf())
                 {
                     break;

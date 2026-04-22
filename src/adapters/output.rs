@@ -12,7 +12,7 @@ use super::{
     hook_supported_by_adapter,
 };
 use crate::lockfile::{Lockfile, managed_mcp_server_name};
-use crate::manifest::{DependencyComponent, HookSpec, Manifest, McpServerConfig};
+use crate::manifest::{DependencyComponent, HookSpec, McpServerConfig};
 use crate::paths::{display_path, strip_path_prefix};
 use crate::resolver::{PackageSource, ResolvedPackage};
 
@@ -96,15 +96,11 @@ fn managed_nodus_args() -> Vec<String> {
 
 fn collected_hooks(packages: &[(ResolvedPackage, PathBuf)]) -> Vec<ManagedHookSpec> {
     let mut hooks = Vec::new();
-    let mut saw_sync_on_launch_hook = false;
+    let mut seen_ids: BTreeSet<String> = BTreeSet::new();
     let mut push_hook = |package_alias: &str, emitted_from_root: bool, hook: HookSpec| {
-        if Manifest::is_sync_on_launch_hook(&hook) {
-            if saw_sync_on_launch_hook {
-                return;
-            }
-            saw_sync_on_launch_hook = true;
+        if !seen_ids.insert(hook.id.clone()) {
+            return;
         }
-
         hooks.push(ManagedHookSpec {
             package_alias: package_alias.to_string(),
             emitted_from_root,

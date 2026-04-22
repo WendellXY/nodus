@@ -5567,6 +5567,134 @@ command = "nodus sync"
 }
 
 #[test]
+#[cfg(unix)]
+fn resync_does_not_remove_and_recreate_unchanged_managed_skill_directories() {
+    use std::os::unix::fs::MetadataExt;
+
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(
+        &temp.path().join("vendor/alpha/skills/alpha-memory"),
+        "alpha-memory",
+    );
+    write_manifest(
+        temp.path(),
+        r#"
+[adapters]
+enabled = ["claude", "codex"]
+
+[dependencies.alpha]
+path = "vendor/alpha"
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let claude_skill_dir = temp.path().join(".claude/skills/alpha-memory");
+    let codex_skill_dir = temp.path().join(".codex/skills/alpha-memory");
+    let claude_inode = fs::metadata(&claude_skill_dir).unwrap().ino();
+    let codex_inode = fs::metadata(&codex_skill_dir).unwrap().ino();
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    assert_eq!(
+        fs::metadata(&claude_skill_dir).unwrap().ino(),
+        claude_inode,
+        "second sync removed and recreated the Claude skill directory"
+    );
+    assert_eq!(
+        fs::metadata(&codex_skill_dir).unwrap().ino(),
+        codex_inode,
+        "second sync removed and recreated the Codex skill directory"
+    );
+}
+
+#[test]
+fn sync_deduplicates_named_hook_declared_by_both_root_and_dependency() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_manifest(
+        temp.path(),
+        r#"
+[adapters]
+enabled = ["claude"]
+
+[[hooks]]
+id = "fuli.claude.session-start"
+event = "session_start"
+adapters = ["claude"]
+
+[hooks.matcher]
+sources = ["startup", "resume", "clear", "compact"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook session-start"
+
+[dependencies.fuli]
+path = "vendor/fuli"
+"#,
+    );
+    write_file(
+        &temp.path().join("vendor/fuli/nodus.toml"),
+        r#"
+[[hooks]]
+id = "fuli.claude.session-start"
+event = "session_start"
+adapters = ["claude"]
+
+[hooks.matcher]
+sources = ["startup", "resume", "clear", "compact"]
+
+[hooks.handler]
+type = "command"
+command = "fuli integration claude hook session-start"
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let claude_hooks = temp.path().join(".claude/hooks");
+    let claude_hook_files = fs::read_dir(&claude_hooks)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("fuli-claude-session-start"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        claude_hook_files.len(),
+        1,
+        "expected the root-declared hook to win; got {claude_hook_files:?}"
+    );
+    assert!(
+        claude_hook_files[0].starts_with("nodus-hook-fuli-claude-session-start-"),
+        "unexpected Claude hook file: {claude_hook_files:?}"
+    );
+
+    let claude_settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    let session_start_entries = claude_settings["hooks"]["SessionStart"].as_array().unwrap();
+    let fuli_entries = session_start_entries
+        .iter()
+        .filter(|entry| {
+            entry["hooks"]
+                .as_array()
+                .map(|hooks| {
+                    hooks.iter().any(|hook| {
+                        hook["command"]
+                            .as_str()
+                            .is_some_and(|cmd| cmd.contains("fuli-claude-session-start"))
+                    })
+                })
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(fuli_entries, 1);
+}
+
+#[test]
 fn sync_merges_codex_startup_hook_into_existing_hooks_without_duplicates() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();
