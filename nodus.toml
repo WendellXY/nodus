@@ -16,3 +16,5 @@ sources = ["startup", "resume"]
 type = "command"
 command = "nodus sync"
 
+[dev-dependencies]
+fuli = { github = "oops-rs/fuli", branch = "main" }
