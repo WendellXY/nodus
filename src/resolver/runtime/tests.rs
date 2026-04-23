@@ -5986,6 +5986,77 @@ command = "./scripts/preflight.sh"
 }
 
 #[test]
+fn sync_filters_tool_hook_matchers_by_adapter_support() {
+    let temp = TempDir::new().unwrap();
+    let cache = cache_dir();
+    write_skill(&temp.path().join("skills/review"), "Review");
+    write_file(
+        &temp.path().join(MANIFEST_FILE),
+        r#"
+[adapters]
+enabled = ["claude", "codex", "copilot", "opencode"]
+
+[[hooks]]
+id = "tool-preflight"
+event = "pre_tool_use"
+
+[hooks.matcher]
+tool_names = ["bash", "read", "apply_patch"]
+
+[hooks.handler]
+type = "command"
+command = "./scripts/preflight.sh"
+
+[[hooks]]
+id = "codex-read"
+event = "pre_tool_use"
+adapters = ["codex"]
+
+[hooks.matcher]
+tool_names = ["read"]
+
+[hooks.handler]
+type = "command"
+command = "./scripts/read.sh"
+"#,
+    );
+
+    sync_in_dir(temp.path(), cache.path(), false, false).unwrap();
+
+    let claude_settings: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        claude_settings["hooks"]["PreToolUse"][0]["matcher"].as_str(),
+        Some("Bash|Read")
+    );
+
+    let codex_hooks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".codex/hooks.json")).unwrap())
+            .unwrap();
+    let codex_pre_tool = codex_hooks["hooks"]["PreToolUse"].as_array().unwrap();
+    assert_eq!(codex_pre_tool.len(), 1);
+    assert_eq!(codex_pre_tool[0]["matcher"].as_str(), Some("Bash"));
+
+    let copilot_hooks: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(temp.path().join(".github/hooks/nodus-hooks.json")).unwrap(),
+    )
+    .unwrap();
+    let copilot_script = copilot_hooks["hooks"]["preToolUse"][0]["bash"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("./");
+    let copilot_script = fs::read_to_string(temp.path().join(copilot_script)).unwrap();
+    assert!(copilot_script.contains(" bash view "));
+    assert!(!copilot_script.contains("apply_patch"));
+
+    let opencode_plugin =
+        fs::read_to_string(temp.path().join(".opencode/plugins/nodus-hooks.js")).unwrap();
+    assert!(opencode_plugin.contains(r#"toolNames: ["bash", "read", "apply_patch"]"#));
+}
+
+#[test]
 fn sync_emits_codex_user_prompt_submit_hook() {
     let temp = TempDir::new().unwrap();
     let cache = cache_dir();

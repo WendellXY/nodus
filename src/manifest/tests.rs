@@ -429,7 +429,7 @@ blocking = true
 timeout_sec = 15
 
 [hooks.matcher]
-tool_names = ["bash"]
+tool_names = ["bash", "read", "edit", "write", "multi_edit", "apply_patch", "glob", "grep", "web_fetch", "web_search", "task"]
 
 [hooks.handler]
 type = "command"
@@ -449,7 +449,19 @@ cwd = "session"
     assert!(hook.blocking);
     assert_eq!(
         hook.matcher.as_ref().unwrap().tool_names,
-        vec![HookTool::Bash]
+        vec![
+            HookTool::Bash,
+            HookTool::Read,
+            HookTool::Edit,
+            HookTool::Write,
+            HookTool::MultiEdit,
+            HookTool::ApplyPatch,
+            HookTool::Glob,
+            HookTool::Grep,
+            HookTool::WebFetch,
+            HookTool::WebSearch,
+            HookTool::Task,
+        ]
     );
     assert_eq!(hook.handler.command, "./scripts/preflight.sh");
     assert_eq!(hook.handler.cwd, HookWorkingDirectory::Session);
@@ -2922,7 +2934,19 @@ fn serializes_hooks() {
             adapters: vec![Adapter::Claude, Adapter::Codex],
             matcher: Some(HookMatcher {
                 sources: Vec::new(),
-                tool_names: vec![HookTool::Bash],
+                tool_names: vec![
+                    HookTool::Bash,
+                    HookTool::Read,
+                    HookTool::Edit,
+                    HookTool::Write,
+                    HookTool::MultiEdit,
+                    HookTool::ApplyPatch,
+                    HookTool::Glob,
+                    HookTool::Grep,
+                    HookTool::WebFetch,
+                    HookTool::WebSearch,
+                    HookTool::Task,
+                ],
             }),
             handler: HookHandler {
                 handler_type: HookHandlerType::Command,
@@ -2942,7 +2966,7 @@ fn serializes_hooks() {
     assert!(encoded.contains("event = \"pre_tool_use\""));
     assert!(encoded.contains("adapters = [\"claude\", \"codex\"]"));
     assert!(encoded.contains("[hooks.matcher]"));
-    assert!(encoded.contains("tool_names = [\"bash\"]"));
+    assert!(encoded.contains("tool_names = [\"bash\", \"read\", \"edit\", \"write\", \"multi_edit\", \"apply_patch\", \"glob\", \"grep\", \"web_fetch\", \"web_search\", \"task\"]"));
     assert!(encoded.contains("[hooks.handler]"));
     assert!(encoded.contains("command = \"./scripts/preflight.sh\""));
     assert!(encoded.contains("cwd = \"session\""));

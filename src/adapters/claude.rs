@@ -5,13 +5,13 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
 
 use crate::adapters::{
-    ArtifactKind, ManagedArtifactNames, ManagedFile, ManagedHookSpec, managed_artifact_path,
-    managed_skill_root,
+    ArtifactKind, ManagedArtifactNames, ManagedFile, ManagedHookSpec,
+    hook_tool_matchers_for_adapter, managed_artifact_path, managed_skill_root,
 };
 use crate::agent_format::markdown_from_codex_agent_toml;
 use crate::hashing::blake3_hex;
 use crate::manifest::{AgentEntry, FileEntry, SkillEntry};
-use crate::manifest::{HookEvent, HookHandlerType, HookSessionSource, HookTool};
+use crate::manifest::{HookEvent, HookHandlerType, HookSessionSource};
 use crate::paths::strip_path_prefix;
 use crate::resolver::ResolvedPackage;
 
@@ -645,24 +645,12 @@ fn matcher_string(hook: &ManagedHookSpec) -> Option<String> {
             )
         }
         HookEvent::PreToolUse | HookEvent::PostToolUse => {
-            let matcher = hook
-                .hook
-                .matcher
-                .as_ref()
-                .map(|matcher| matcher.tool_names.as_slice())
-                .unwrap_or_default();
+            let matcher =
+                hook_tool_matchers_for_adapter(&hook.hook, crate::adapters::Adapter::Claude);
             if matcher.is_empty() {
                 Some("*".to_string())
             } else {
-                Some(
-                    matcher
-                        .iter()
-                        .map(|tool_name| match tool_name {
-                            HookTool::Bash => "Bash",
-                        })
-                        .collect::<Vec<_>>()
-                        .join("|"),
-                )
+                Some(matcher.join("|"))
             }
         }
         HookEvent::UserPromptSubmit

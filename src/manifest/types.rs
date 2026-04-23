@@ -141,13 +141,33 @@ impl HookSessionSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookTool {
+    ApplyPatch,
     Bash,
+    Edit,
+    Glob,
+    Grep,
+    MultiEdit,
+    Read,
+    Task,
+    WebFetch,
+    WebSearch,
+    Write,
 }
 
 impl HookTool {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ApplyPatch => "apply_patch",
             Self::Bash => "bash",
+            Self::Edit => "edit",
+            Self::Glob => "glob",
+            Self::Grep => "grep",
+            Self::MultiEdit => "multi_edit",
+            Self::Read => "read",
+            Self::Task => "task",
+            Self::WebFetch => "web_fetch",
+            Self::WebSearch => "web_search",
+            Self::Write => "write",
         }
     }
 }

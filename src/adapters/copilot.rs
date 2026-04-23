@@ -6,12 +6,13 @@ use serde_json::{Map, Value, json};
 
 use crate::adapters::{
     ArtifactKind, ManagedArtifactNames, ManagedFile, ManagedHookSpec,
-    effective_session_start_sources, managed_artifact_path, managed_skill_id, managed_skill_root,
+    effective_session_start_sources, hook_tool_matchers_for_adapter, managed_artifact_path,
+    managed_skill_id, managed_skill_root,
 };
 use crate::agent_format::markdown_from_codex_agent_toml;
 use crate::hashing::blake3_hex;
 use crate::manifest::SkillEntry;
-use crate::manifest::{AgentEntry, HookEvent, HookHandlerType, HookTool};
+use crate::manifest::{AgentEntry, HookEvent, HookHandlerType};
 use crate::paths::strip_path_prefix;
 use crate::resolver::ResolvedPackage;
 
@@ -247,23 +248,12 @@ fn tool_filter_script(hook: &ManagedHookSpec) -> String {
         return String::new();
     }
 
-    let tool_names = hook
-        .hook
-        .matcher
-        .as_ref()
-        .map(|matcher| matcher.tool_names.as_slice())
-        .unwrap_or_default();
+    let tool_names = hook_tool_matchers_for_adapter(&hook.hook, crate::adapters::Adapter::Copilot);
     if tool_names.is_empty() {
         return String::new();
     }
 
-    let values = tool_names
-        .iter()
-        .map(|tool_name| match tool_name {
-            HookTool::Bash => "bash",
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    let values = tool_names.iter().copied().collect::<Vec<_>>().join(" ");
 
     format!(
         r#"tool_name="$(json_string_field toolName | tr '[:upper:]' '[:lower:]')"

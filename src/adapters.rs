@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::lockfile::LockedPackage;
-use crate::manifest::{DependencyComponent, HookEvent, HookSessionSource, HookSpec};
+use crate::manifest::{DependencyComponent, HookEvent, HookSessionSource, HookSpec, HookTool};
 use crate::resolver::{PackageSource, ResolvedPackage};
 
 mod output;
@@ -98,6 +98,7 @@ pub(crate) fn hook_supported_by_adapter(hook: &HookSpec, adapter: Adapter) -> bo
                     .iter()
                     .any(|source| session_start_source_supported_by_adapter(adapter, *source))
             }))
+        && tool_matchers_supported_by_adapter(hook, adapter)
 }
 
 pub(crate) fn effective_session_start_sources(
@@ -130,6 +131,88 @@ pub(crate) fn effective_session_start_sources(
     });
     sources.dedup_by_key(|source| source.as_str());
     sources
+}
+
+fn tool_matchers_supported_by_adapter(hook: &HookSpec, adapter: Adapter) -> bool {
+    if !matches!(
+        hook.event,
+        HookEvent::PreToolUse | HookEvent::PermissionRequest | HookEvent::PostToolUse
+    ) {
+        return true;
+    }
+
+    let configured = hook
+        .matcher
+        .as_ref()
+        .map(|matcher| matcher.tool_names.as_slice())
+        .unwrap_or_default();
+    configured.is_empty()
+        || configured
+            .iter()
+            .any(|tool| hook_tool_matcher_for_adapter(adapter, *tool).is_some())
+}
+
+pub(crate) fn hook_tool_matchers_for_adapter(
+    hook: &HookSpec,
+    adapter: Adapter,
+) -> Vec<&'static str> {
+    hook.matcher
+        .as_ref()
+        .map(|matcher| matcher.tool_names.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|tool| hook_tool_matcher_for_adapter(adapter, *tool))
+        .collect()
+}
+
+pub(crate) fn hook_tool_matcher_for_adapter(
+    adapter: Adapter,
+    tool: HookTool,
+) -> Option<&'static str> {
+    match adapter {
+        Adapter::Claude => match tool {
+            HookTool::Bash => Some("Bash"),
+            HookTool::Read => Some("Read"),
+            HookTool::Edit => Some("Edit"),
+            HookTool::Write => Some("Write"),
+            HookTool::MultiEdit => Some("MultiEdit"),
+            HookTool::Glob => Some("Glob"),
+            HookTool::Grep => Some("Grep"),
+            HookTool::WebFetch => Some("WebFetch"),
+            HookTool::WebSearch => Some("WebSearch"),
+            HookTool::Task => Some("Task"),
+            HookTool::ApplyPatch => None,
+        },
+        Adapter::Codex => match tool {
+            HookTool::Bash => Some("Bash"),
+            _ => None,
+        },
+        Adapter::OpenCode => match tool {
+            HookTool::ApplyPatch => Some("apply_patch"),
+            HookTool::Bash => Some("bash"),
+            HookTool::Edit => Some("edit"),
+            HookTool::Glob => Some("glob"),
+            HookTool::Grep => Some("grep"),
+            HookTool::MultiEdit => Some("multi_edit"),
+            HookTool::Read => Some("read"),
+            HookTool::Task => Some("task"),
+            HookTool::WebFetch => Some("web_fetch"),
+            HookTool::WebSearch => Some("web_search"),
+            HookTool::Write => Some("write"),
+        },
+        Adapter::Copilot => match tool {
+            HookTool::Bash => Some("bash"),
+            HookTool::Read => Some("view"),
+            HookTool::Edit => Some("edit"),
+            HookTool::Write => Some("create"),
+            HookTool::Glob => Some("glob"),
+            HookTool::Grep => Some("grep"),
+            HookTool::WebFetch => Some("web_fetch"),
+            HookTool::Task => Some("task"),
+            HookTool::ApplyPatch | HookTool::MultiEdit | HookTool::WebSearch => None,
+        },
+        Adapter::Agents | Adapter::Cursor => None,
+    }
 }
 
 #[derive(
